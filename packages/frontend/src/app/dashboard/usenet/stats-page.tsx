@@ -892,6 +892,9 @@ function IndexerTable({
   );
 }
 
+/** Sole-source share at which an indexer is flagged as hard to drop. */
+const SOLE_SOURCE_HIGHLIGHT = 0.1;
+
 function IndexerSearchTable({
   indexers,
   onReset,
@@ -899,7 +902,9 @@ function IndexerSearchTable({
   indexers: UsenetIndexerStatRow[];
   onReset: (target: ResetStatsTarget) => void;
 }) {
-  const rows = indexers.filter((i) => i.searchRequests > 0 || i.results > 0);
+  const rows = indexers.filter(
+    (i) => i.searchRequests > 0 || i.results > 0 || i.uniqReleases > 0
+  );
   if (rows.length === 0) {
     return (
       <p className="text-sm text-[--muted]">
@@ -909,7 +914,7 @@ function IndexerSearchTable({
   }
   return (
     <div className="overflow-x-auto -mx-4 px-4 lg:mx-0 lg:px-0">
-      <table className="w-full text-sm min-w-[720px]">
+      <table className="w-full text-sm min-w-[800px]">
         <thead className="text-[--muted] text-xs uppercase">
           <tr className="text-left border-b border-[--border]">
             <th className="py-2 pr-3">Indexer</th>
@@ -937,6 +942,12 @@ function IndexerSearchTable({
               title="Results attributed to this indexer, and the average per search that returned any."
             >
               Results
+            </th>
+            <th
+              className="py-2 px-3 text-right"
+              title="Of the distinct releases this indexer returned, the share no other indexer returned for the same request. Raw results, before your filters."
+            >
+              Unique
             </th>
             <th className="py-2 pl-3 w-8" aria-label="Actions" />
           </tr>
@@ -1009,6 +1020,34 @@ function IndexerSearchTable({
                     </span>
                   ) : (
                     '0'
+                  )}
+                </td>
+                <td
+                  className="py-2 px-3 text-right tabular-nums"
+                  title={
+                    i.uniqRequests > 0
+                      ? `Only source in ${formatCompact(i.uniqSole)} of ${formatCompact(i.uniqRequests)} requests`
+                      : undefined
+                  }
+                >
+                  {i.uniqueRate == null ? (
+                    '—'
+                  ) : (
+                    <>
+                      <span
+                        className={cn(
+                          i.soleRate != null &&
+                            i.soleRate >= SOLE_SOURCE_HIGHLIGHT &&
+                            'text-emerald-400'
+                        )}
+                      >
+                        {formatPercent(i.uniqueRate)}
+                      </span>
+                      <span className="text-[--muted]">
+                        {' '}
+                        · {formatCompact(i.uniqUnique)}
+                      </span>
+                    </>
                   )}
                 </td>
                 <td className="py-2 pl-3 text-right">
