@@ -28,6 +28,14 @@ export interface UsenetIndexerDelta {
   sumSearchMs?: number;
   results?: number;
   searchHits?: number;
+  /** Stream requests where this indexer returned >= 1 release. */
+  uniqRequests?: number;
+  /** Distinct releases returned, across those requests. */
+  uniqReleases?: number;
+  /** Releases no other indexer returned in the same request. */
+  uniqUnique?: number;
+  /** Requests where this was the only indexer with results. */
+  uniqSole?: number;
 }
 
 /** Aggregated per-indexer rollup over a window. */
@@ -55,6 +63,10 @@ export interface UsenetIndexerRollup {
   sumSearchMs: number;
   results: number;
   searchHits: number;
+  uniqRequests: number;
+  uniqReleases: number;
+  uniqUnique: number;
+  uniqSole: number;
 }
 
 /** Most recent grab-fetch error for an indexer (diagnostic, not windowed). */
@@ -119,9 +131,9 @@ export class UsenetIndexerMetricsRepository {
     const importMs = d.importMs ?? 0;
     await getDb().exec(
       sql`INSERT INTO usenet_indexer_metrics
-            (hour_ms, indexer, ok, degraded, failed, failed_missing, failed_fetch, fetch_auth, fetch_limited, sum_grab_ms, grab_samples, sum_import_ms, import_samples, search_requests, search_failed, search_empty, search_auth, search_limited, search_timeout, sum_search_ms, results, search_hits)
+            (hour_ms, indexer, ok, degraded, failed, failed_missing, failed_fetch, fetch_auth, fetch_limited, sum_grab_ms, grab_samples, sum_import_ms, import_samples, search_requests, search_failed, search_empty, search_auth, search_limited, search_timeout, sum_search_ms, results, search_hits, uniq_requests, uniq_releases, uniq_unique, uniq_sole)
           VALUES
-            (${hourMs}, ${d.indexer}, ${d.ok ?? 0}, ${d.degraded ?? 0}, ${d.failed ?? 0}, ${d.failedMissing ?? 0}, ${d.failedFetch ?? 0}, ${d.fetchAuth ?? 0}, ${d.fetchLimited ?? 0}, ${grabMs}, ${d.grabMs != null ? 1 : 0}, ${importMs}, ${d.importMs != null ? 1 : 0}, ${d.searchRequests ?? 0}, ${d.searchFailed ?? 0}, ${d.searchEmpty ?? 0}, ${d.searchAuth ?? 0}, ${d.searchLimited ?? 0}, ${d.searchTimeout ?? 0}, ${d.sumSearchMs ?? 0}, ${d.results ?? 0}, ${d.searchHits ?? 0})
+            (${hourMs}, ${d.indexer}, ${d.ok ?? 0}, ${d.degraded ?? 0}, ${d.failed ?? 0}, ${d.failedMissing ?? 0}, ${d.failedFetch ?? 0}, ${d.fetchAuth ?? 0}, ${d.fetchLimited ?? 0}, ${grabMs}, ${d.grabMs != null ? 1 : 0}, ${importMs}, ${d.importMs != null ? 1 : 0}, ${d.searchRequests ?? 0}, ${d.searchFailed ?? 0}, ${d.searchEmpty ?? 0}, ${d.searchAuth ?? 0}, ${d.searchLimited ?? 0}, ${d.searchTimeout ?? 0}, ${d.sumSearchMs ?? 0}, ${d.results ?? 0}, ${d.searchHits ?? 0}, ${d.uniqRequests ?? 0}, ${d.uniqReleases ?? 0}, ${d.uniqUnique ?? 0}, ${d.uniqSole ?? 0})
           ON CONFLICT(hour_ms, indexer) DO UPDATE SET
             ok = usenet_indexer_metrics.ok + EXCLUDED.ok,
             degraded = usenet_indexer_metrics.degraded + EXCLUDED.degraded,
@@ -142,7 +154,11 @@ export class UsenetIndexerMetricsRepository {
             search_timeout = usenet_indexer_metrics.search_timeout + EXCLUDED.search_timeout,
             sum_search_ms = usenet_indexer_metrics.sum_search_ms + EXCLUDED.sum_search_ms,
             results = usenet_indexer_metrics.results + EXCLUDED.results,
-            search_hits = usenet_indexer_metrics.search_hits + EXCLUDED.search_hits`
+            search_hits = usenet_indexer_metrics.search_hits + EXCLUDED.search_hits,
+            uniq_requests = usenet_indexer_metrics.uniq_requests + EXCLUDED.uniq_requests,
+            uniq_releases = usenet_indexer_metrics.uniq_releases + EXCLUDED.uniq_releases,
+            uniq_unique = usenet_indexer_metrics.uniq_unique + EXCLUDED.uniq_unique,
+            uniq_sole = usenet_indexer_metrics.uniq_sole + EXCLUDED.uniq_sole`
     );
   }
 
@@ -205,7 +221,11 @@ export class UsenetIndexerMetricsRepository {
                  SUM(search_timeout) AS search_timeout,
                  SUM(sum_search_ms) AS sum_search_ms,
                  SUM(results) AS results,
-                 SUM(search_hits) AS search_hits
+                 SUM(search_hits) AS search_hits,
+                 SUM(uniq_requests) AS uniq_requests,
+                 SUM(uniq_releases) AS uniq_releases,
+                 SUM(uniq_unique) AS uniq_unique,
+                 SUM(uniq_sole) AS uniq_sole
             FROM usenet_indexer_metrics
            WHERE hour_ms >= ${sinceMs}
            GROUP BY indexer`
@@ -237,6 +257,10 @@ export class UsenetIndexerMetricsRepository {
         sumSearchMs: Number(r.sum_search_ms ?? 0),
         results: Number(r.results ?? 0),
         searchHits: Number(r.search_hits ?? 0),
+        uniqRequests: Number(r.uniq_requests ?? 0),
+        uniqReleases: Number(r.uniq_releases ?? 0),
+        uniqUnique: Number(r.uniq_unique ?? 0),
+        uniqSole: Number(r.uniq_sole ?? 0),
       };
     });
   }

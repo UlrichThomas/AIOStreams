@@ -25,6 +25,7 @@ import {
   startRemuxDbLookup,
 } from '../remuxdb/wrap.js';
 import { resolveStoredMediaInfo } from '../media-info/lookup.js';
+import { recordUniqueness } from '../usenet/integration/uniqueness-metrics.js';
 
 /**
  * Per-addon outcome tracked through {@link StreamFetcher.fetch} and surfaced
@@ -98,6 +99,8 @@ class StreamFetcher {
       description: string;
     }[] = [];
     let allStreams: ParsedStream[] = [];
+    // Raw (pre-filter, pre-dedup) usenet results for per-indexer uniqueness.
+    const rawUsenet: ParsedStream[] = [];
     let mediaInfoMs = 0;
     const start = Date.now();
 
@@ -154,6 +157,10 @@ class StreamFetcher {
         const usableStreams = streams.filter(
           (s) => s.type !== constants.ERROR_STREAM_TYPE
         );
+        for (const s of usableStreams) {
+          if (s.type === 'usenet' || s.type === 'stremio-usenet')
+            rawUsenet.push(s);
+        }
         const latencyMs = Date.now() - start;
         const status: AnalyticsStatus =
           errorStreams.length > 0 && usableStreams.length === 0
@@ -696,6 +703,7 @@ class StreamFetcher {
     for (let i = 0; i < allStatisticStreams.length; i++) {
       allStatisticStreams[i] = statStreamsWithTime[i].stat;
     }
+    recordUniqueness(rawUsenet);
     return {
       streams: allStreams,
       errors: allErrors,
