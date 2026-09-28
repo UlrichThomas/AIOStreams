@@ -65,7 +65,8 @@ class StreamFetcher {
 
   public async fetch(
     addons: Addon[],
-    context: StreamContext
+    context: StreamContext,
+    options: { recordMetrics?: boolean } = {}
   ): Promise<{
     streams: ParsedStream[];
     errors: {
@@ -96,6 +97,12 @@ class StreamFetcher {
     let allStreams: ParsedStream[] = [];
     // Raw (pre-filter, pre-dedup) usenet results for per-indexer uniqueness.
     const rawUsenet: ParsedStream[] = [];
+    // Every addon fetch started, so uniqueness can wait for stragglers the
+    // dynamic/group paths return without.
+    const addonFetches: Promise<unknown>[] = [];
+    // Set when an addon fails or returns error streams: its results are
+    // missing, which would make everyone else's look unique.
+    let fetchDegraded = false;
     let remuxDbMs = 0;
     const start = Date.now();
 
@@ -152,6 +159,7 @@ class StreamFetcher {
         const usableStreams = streams.filter(
           (s) => s.type !== constants.ERROR_STREAM_TYPE
         );
+        if (errorStreams.length > 0) fetchDegraded = true;
         for (const s of usableStreams) {
           if (s.type === 'usenet' || s.type === 'stremio-usenet')
             rawUsenet.push(s);
@@ -222,6 +230,7 @@ class StreamFetcher {
         };
         const { error_kind } = classifyAddonError('stream', error);
         const took = Date.now() - start;
+        fetchDegraded = true;
         dispositions.set(addon.manifestUrl, {
           addon,
           disposition: 'error',
@@ -246,7 +255,9 @@ class StreamFetcher {
     // Helper function to fetch from a group of addons and track time
     const fetchAndProcessAddons = async (addons: Addon[]) => {
       const groupStart = Date.now();
-      const results = await Promise.all(addons.map(fetchFromAddon));
+      const fetches = addons.map(fetchFromAddon);
+      addonFetches.push(...fetches);
+      const results = await Promise.all(fetches);
 
       const groupStreams = results.flatMap((r) => r.streams);
       const groupErrors = results.flatMap((r) => r.errors);
@@ -697,7 +708,17 @@ class StreamFetcher {
     for (let i = 0; i < allStatisticStreams.length; i++) {
       allStatisticStreams[i] = statStreamsWithTime[i].stat;
     }
-    recordUniqueness(rawUsenet);
+    if (options.recordMetrics !== false) {
+      // Record once every started fetch has settled, so late results still
+      // count. Skip requests where an addon was never queried or failed: the
+      // releases it would have returned are missing, which inflates the
+      // unique/sole numbers of the indexers that did answer.
+      const queried = addonFetches.length;
+      void Promise.allSettled(addonFetches).then(() => {
+        if (queried < addons.length || fetchDegraded) return;
+        recordUniqueness(rawUsenet);
+      });
+    }
     return {
       streams: allStreams,
       errors: allErrors,
