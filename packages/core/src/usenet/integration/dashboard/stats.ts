@@ -111,6 +111,18 @@ export interface UsenetIndexerStatRow {
   /** results / total results across indexers. */
   resultsShare: number;
   lastSearchError?: { status?: number; message: string; atMs: number };
+  /** Stream requests where this indexer returned >= 1 release. */
+  uniqRequests: number;
+  /** Distinct releases returned (raw, before the user's filters). */
+  uniqReleases: number;
+  /** Releases no other indexer returned for the same request. */
+  uniqUnique: number;
+  /** Requests where this was the only indexer with results. */
+  uniqSole: number;
+  /** uniqUnique / uniqReleases; null when no releases. */
+  uniqueRate: number | null;
+  /** uniqSole / uniqRequests; null when no requests. */
+  soleRate: number | null;
 }
 
 export interface UsenetThroughputPoint {
@@ -588,6 +600,13 @@ export async function getUsenetStatsOverview(
               atMs: searchErr.atMs,
             }
           : undefined,
+        uniqRequests: agg.uniqRequests,
+        uniqReleases: agg.uniqReleases,
+        uniqUnique: agg.uniqUnique,
+        uniqSole: agg.uniqSole,
+        uniqueRate:
+          agg.uniqReleases > 0 ? agg.uniqUnique / agg.uniqReleases : null,
+        soleRate: agg.uniqRequests > 0 ? agg.uniqSole / agg.uniqRequests : null,
       };
     })
     .sort(
