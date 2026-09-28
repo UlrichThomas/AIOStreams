@@ -41,6 +41,24 @@ export function stripRepostSuffixes(name: string): string {
 }
 
 /**
+ * Comparison key for "same release name": repost suffixes, video extension,
+ * punctuation and case removed. Shared by the deduplicator's filename key and
+ * the usenet uniqueness metrics so both agree on what counts as a match.
+ */
+export function normaliseReleaseName(name: string): string {
+  // Strip repost suffixes first: in `Name.mkv-xpost` the extension is only at
+  // the end once the suffix is gone.
+  return stripRepostSuffixes(name)
+    .replace(
+      /(mkv|mp4|avi|mov|wmv|flv|webm|m4v|mpg|mpeg|3gp|3g2|m2ts|ts|vob|ogv|ogm|divx|xvid|rm|rmvb|asf|mxf|mka|mks|mk3d|webm|f4v|f4p|f4a|f4b)$/i,
+      ''
+    )
+    .replace(/[^\p{L}\p{N}+]/gu, '')
+    .replace(/\s+/g, '')
+    .toLowerCase();
+}
+
+/**
  * Memoised {@link parseTorrentTitle}.
  *
  * The same names are parsed repeatedly: builtins parse every file inside every

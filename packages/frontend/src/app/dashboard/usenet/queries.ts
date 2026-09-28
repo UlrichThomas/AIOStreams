@@ -143,6 +143,12 @@ export interface UsenetIndexerStatRow {
   avgResults: number | null;
   resultsShare: number;
   lastSearchError?: { status?: number; message: string; atMs: number };
+  uniqRequests: number;
+  uniqReleases: number;
+  uniqUnique: number;
+  uniqSole: number;
+  uniqueRate: number | null;
+  soleRate: number | null;
 }
 
 export interface UsenetStatsOverview {
