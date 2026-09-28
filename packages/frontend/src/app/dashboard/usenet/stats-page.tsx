@@ -905,6 +905,8 @@ function IndexerSearchTable({
   const rows = indexers.filter(
     (i) => i.searchRequests > 0 || i.results > 0 || i.uniqReleases > 0
   );
+  // With one contributing indexer, unique and sole are trivially 100%.
+  const comparable = rows.filter((i) => i.uniqReleases > 0).length >= 2;
   if (rows.length === 0) {
     return (
       <p className="text-sm text-[--muted]">
@@ -945,7 +947,7 @@ function IndexerSearchTable({
             </th>
             <th
               className="py-2 px-3 text-right"
-              title="Of the distinct releases this indexer returned, the share no other indexer returned for the same request. Raw results, before your filters."
+              title="Of the distinct releases this indexer returned, the share no other indexer returned for the same request. Raw results, before your filters; only requests where every addon answered are counted. Needs two or more indexers returning results."
             >
               Unique
             </th>
@@ -1025,28 +1027,26 @@ function IndexerSearchTable({
                 <td
                   className="py-2 px-3 text-right tabular-nums"
                   title={
-                    i.uniqRequests > 0
+                    comparable && i.uniqRequests > 0
                       ? `Only source in ${formatCompact(i.uniqSole)} of ${formatCompact(i.uniqRequests)} requests`
                       : undefined
                   }
                 >
-                  {i.uniqueRate == null ? (
+                  {!comparable || i.uniqueRate == null ? (
                     '—'
                   ) : (
                     <>
-                      <span
-                        className={cn(
-                          i.soleRate != null &&
-                            i.soleRate >= SOLE_SOURCE_HIGHLIGHT &&
-                            'text-emerald-400'
-                        )}
-                      >
-                        {formatPercent(i.uniqueRate)}
-                      </span>
+                      {formatPercent(i.uniqueRate)}
                       <span className="text-[--muted]">
                         {' '}
                         · {formatCompact(i.uniqUnique)}
                       </span>
+                      {i.soleRate != null &&
+                        i.soleRate >= SOLE_SOURCE_HIGHLIGHT && (
+                          <span className="ml-1.5 text-xs text-emerald-400">
+                            sole {formatPercent(i.soleRate)}
+                          </span>
+                        )}
                     </>
                   )}
                 </td>
