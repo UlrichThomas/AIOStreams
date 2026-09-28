@@ -59,7 +59,10 @@ function impactOf(
     );
   }
   if (target !== 'providers' && r.indexerRows > 0) {
-    detail.push(`${formatCompact(r.indexerGrabs)} grabs`);
+    detail.push(
+      `${formatCompact(r.indexerGrabs)} grabs`,
+      `${formatCompact(r.indexerSearches)} searches`
+    );
   }
   const plural = rows === 1 ? 'row' : 'rows';
   return `Removes ${formatCompact(rows)} hourly ${plural}${
@@ -145,6 +148,8 @@ export function ResetStatsModal({
           Deletes the recorded history for{' '}
           <span className="text-[--foreground]">{target.label}</span>. Charts
           and totals are rebuilt from what is left, and this cannot be undone.
+          {target.target !== 'providers' &&
+            ' Indexer grab and search stats share the same rows, so both are removed together.'}
         </p>
 
         <BasicField label="Range">

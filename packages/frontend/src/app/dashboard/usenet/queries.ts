@@ -130,6 +130,19 @@ export interface UsenetIndexerStatRow {
   avgGrabMs: number | null;
   avgImportMs: number | null;
   lastError?: { status?: number; message: string; atMs: number };
+  searchRequests: number;
+  searchFailed: number;
+  searchEmpty: number;
+  searchAuth: number;
+  searchLimited: number;
+  searchTimeout: number;
+  searchSuccessRate: number;
+  avgSearchMs: number | null;
+  results: number;
+  searchHits: number;
+  avgResults: number | null;
+  resultsShare: number;
+  lastSearchError?: { status?: number; message: string; atMs: number };
 }
 
 export interface UsenetStatsOverview {
@@ -348,6 +361,7 @@ export interface UsenetStatsResetResult {
   providerBytes: number;
   indexerRows: number;
   indexerGrabs: number;
+  indexerSearches: number;
   lastErrorRows: number;
 }
 
