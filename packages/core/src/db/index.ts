@@ -44,7 +44,7 @@ export {
 } from './repositories/usenet-metrics.js';
 export {
   UsenetIndexerMetricsRepository,
-  type UsenetIndexerGrabDelta,
+  type UsenetIndexerDelta,
   type UsenetIndexerScope,
   type UsenetIndexerRollup,
   type UsenetIndexerLastError,

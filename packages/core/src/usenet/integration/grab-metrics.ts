@@ -1,6 +1,6 @@
 import {
   UsenetIndexerMetricsRepository,
-  type UsenetIndexerGrabDelta,
+  type UsenetIndexerDelta,
 } from '../../db/index.js';
 import { GrabHttpError, NotAnNzbError } from '../../utils/download-manager.js';
 import { createLogger } from '../../logging/logger.js';
@@ -76,7 +76,7 @@ export interface GrabOutcome {
 }
 
 /** Map a concluded grab attempt onto its rollup delta. */
-export function grabOutcomeDelta(o: GrabOutcome): UsenetIndexerGrabDelta {
+export function grabOutcomeDelta(o: GrabOutcome): UsenetIndexerDelta {
   const failed = o.outcome === 'failed' ? 1 : 0;
   const fetchFailed = failed && o.errorCode === 'nzb_fetch_failed' ? 1 : 0;
   return {

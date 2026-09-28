@@ -2,7 +2,7 @@ import { getDb } from '../db.js';
 import { join, sql, type SqlFragment } from '../sql.js';
 
 /** One concluded grab attempt to fold into an hourly bucket. */
-export interface UsenetIndexerGrabDelta {
+export interface UsenetIndexerDelta {
   indexer: string;
   ok?: number;
   degraded?: number;
@@ -19,6 +19,15 @@ export interface UsenetIndexerGrabDelta {
   grabMs?: number;
   /** Inspect/import duration; folds into sum_import_ms + import_samples. */
   importMs?: number;
+  searchRequests?: number;
+  searchFailed?: number;
+  searchEmpty?: number;
+  searchAuth?: number;
+  searchLimited?: number;
+  searchTimeout?: number;
+  sumSearchMs?: number;
+  results?: number;
+  searchHits?: number;
 }
 
 /** Aggregated per-indexer rollup over a window. */
@@ -37,6 +46,15 @@ export interface UsenetIndexerRollup {
   grabSamples: number;
   sumImportMs: number;
   importSamples: number;
+  searchRequests: number;
+  searchFailed: number;
+  searchEmpty: number;
+  searchAuth: number;
+  searchLimited: number;
+  searchTimeout: number;
+  sumSearchMs: number;
+  results: number;
+  searchHits: number;
 }
 
 /** Most recent grab-fetch error for an indexer (diagnostic, not windowed). */
@@ -93,7 +111,7 @@ function scopeWhere(s: UsenetIndexerScope): SqlFragment {
 export class UsenetIndexerMetricsRepository {
   /** Fold one grab outcome into the hour bucket containing `atMs` (defaults now). */
   static async record(
-    d: UsenetIndexerGrabDelta,
+    d: UsenetIndexerDelta,
     atMs: number = Date.now()
   ): Promise<void> {
     const hourMs = hourFloor(atMs);
@@ -101,9 +119,9 @@ export class UsenetIndexerMetricsRepository {
     const importMs = d.importMs ?? 0;
     await getDb().exec(
       sql`INSERT INTO usenet_indexer_metrics
-            (hour_ms, indexer, ok, degraded, failed, failed_missing, failed_fetch, fetch_auth, fetch_limited, sum_grab_ms, grab_samples, sum_import_ms, import_samples)
+            (hour_ms, indexer, ok, degraded, failed, failed_missing, failed_fetch, fetch_auth, fetch_limited, sum_grab_ms, grab_samples, sum_import_ms, import_samples, search_requests, search_failed, search_empty, search_auth, search_limited, search_timeout, sum_search_ms, results, search_hits)
           VALUES
-            (${hourMs}, ${d.indexer}, ${d.ok ?? 0}, ${d.degraded ?? 0}, ${d.failed ?? 0}, ${d.failedMissing ?? 0}, ${d.failedFetch ?? 0}, ${d.fetchAuth ?? 0}, ${d.fetchLimited ?? 0}, ${grabMs}, ${d.grabMs != null ? 1 : 0}, ${importMs}, ${d.importMs != null ? 1 : 0})
+            (${hourMs}, ${d.indexer}, ${d.ok ?? 0}, ${d.degraded ?? 0}, ${d.failed ?? 0}, ${d.failedMissing ?? 0}, ${d.failedFetch ?? 0}, ${d.fetchAuth ?? 0}, ${d.fetchLimited ?? 0}, ${grabMs}, ${d.grabMs != null ? 1 : 0}, ${importMs}, ${d.importMs != null ? 1 : 0}, ${d.searchRequests ?? 0}, ${d.searchFailed ?? 0}, ${d.searchEmpty ?? 0}, ${d.searchAuth ?? 0}, ${d.searchLimited ?? 0}, ${d.searchTimeout ?? 0}, ${d.sumSearchMs ?? 0}, ${d.results ?? 0}, ${d.searchHits ?? 0})
           ON CONFLICT(hour_ms, indexer) DO UPDATE SET
             ok = usenet_indexer_metrics.ok + EXCLUDED.ok,
             degraded = usenet_indexer_metrics.degraded + EXCLUDED.degraded,
@@ -115,7 +133,16 @@ export class UsenetIndexerMetricsRepository {
             sum_grab_ms = usenet_indexer_metrics.sum_grab_ms + EXCLUDED.sum_grab_ms,
             grab_samples = usenet_indexer_metrics.grab_samples + EXCLUDED.grab_samples,
             sum_import_ms = usenet_indexer_metrics.sum_import_ms + EXCLUDED.sum_import_ms,
-            import_samples = usenet_indexer_metrics.import_samples + EXCLUDED.import_samples`
+            import_samples = usenet_indexer_metrics.import_samples + EXCLUDED.import_samples,
+            search_requests = usenet_indexer_metrics.search_requests + EXCLUDED.search_requests,
+            search_failed = usenet_indexer_metrics.search_failed + EXCLUDED.search_failed,
+            search_empty = usenet_indexer_metrics.search_empty + EXCLUDED.search_empty,
+            search_auth = usenet_indexer_metrics.search_auth + EXCLUDED.search_auth,
+            search_limited = usenet_indexer_metrics.search_limited + EXCLUDED.search_limited,
+            search_timeout = usenet_indexer_metrics.search_timeout + EXCLUDED.search_timeout,
+            sum_search_ms = usenet_indexer_metrics.sum_search_ms + EXCLUDED.sum_search_ms,
+            results = usenet_indexer_metrics.results + EXCLUDED.results,
+            search_hits = usenet_indexer_metrics.search_hits + EXCLUDED.search_hits`
     );
   }
 
@@ -169,7 +196,16 @@ export class UsenetIndexerMetricsRepository {
                  SUM(sum_grab_ms) AS sum_grab_ms,
                  SUM(grab_samples) AS grab_samples,
                  SUM(sum_import_ms) AS sum_import_ms,
-                 SUM(import_samples) AS import_samples
+                 SUM(import_samples) AS import_samples,
+                 SUM(search_requests) AS search_requests,
+                 SUM(search_failed) AS search_failed,
+                 SUM(search_empty) AS search_empty,
+                 SUM(search_auth) AS search_auth,
+                 SUM(search_limited) AS search_limited,
+                 SUM(search_timeout) AS search_timeout,
+                 SUM(sum_search_ms) AS sum_search_ms,
+                 SUM(results) AS results,
+                 SUM(search_hits) AS search_hits
             FROM usenet_indexer_metrics
            WHERE hour_ms >= ${sinceMs}
            GROUP BY indexer`
@@ -192,6 +228,15 @@ export class UsenetIndexerMetricsRepository {
         grabSamples: Number(r.grab_samples ?? 0),
         sumImportMs: Number(r.sum_import_ms ?? 0),
         importSamples: Number(r.import_samples ?? 0),
+        searchRequests: Number(r.search_requests ?? 0),
+        searchFailed: Number(r.search_failed ?? 0),
+        searchEmpty: Number(r.search_empty ?? 0),
+        searchAuth: Number(r.search_auth ?? 0),
+        searchLimited: Number(r.search_limited ?? 0),
+        searchTimeout: Number(r.search_timeout ?? 0),
+        sumSearchMs: Number(r.sum_search_ms ?? 0),
+        results: Number(r.results ?? 0),
+        searchHits: Number(r.search_hits ?? 0),
       };
     });
   }
@@ -199,20 +244,23 @@ export class UsenetIndexerMetricsRepository {
   /** Totals for a scope, for previewing what a reset would remove. */
   static async sumScope(
     scope: UsenetIndexerScope
-  ): Promise<{ rows: number; grabs: number }> {
+  ): Promise<{ rows: number; grabs: number; searches: number }> {
     // `rows` is a reserved word in postgres; alias around it.
     const row = await getDb().maybeOne<{
       row_count: number | string;
       grabs: number | string | null;
+      searches: number | string | null;
     }>(
       sql`SELECT COUNT(*) AS row_count,
-                 SUM(ok + degraded + failed) AS grabs
+                 SUM(ok + degraded + failed) AS grabs,
+                 SUM(search_requests) AS searches
             FROM usenet_indexer_metrics
            WHERE ${scopeWhere(scope)}`
     );
     return {
       rows: Number(row?.row_count ?? 0),
       grabs: Number(row?.grabs ?? 0),
+      searches: Number(row?.searches ?? 0),
     };
   }
 
@@ -237,6 +285,50 @@ export class UsenetIndexerMetricsRepository {
   static async pruneOlderThan(cutoffMs: number): Promise<number> {
     const res = await getDb().exec(
       sql`DELETE FROM usenet_indexer_metrics WHERE hour_ms < ${cutoffMs}`
+    );
+    return res.rowCount ?? 0;
+  }
+
+  /** Overwrite the most recent search error for an indexer/endpoint. */
+  static async setLastSearchError(
+    indexer: string,
+    e: { status?: number; message: string },
+    atMs = Date.now()
+  ): Promise<void> {
+    await getDb().exec(
+      sql`INSERT INTO usenet_indexer_last_search_error (indexer, status, message, at_ms)
+      VALUES (${indexer}, ${e.status ?? null}, ${e.message}, ${atMs})
+      ON CONFLICT(indexer) DO UPDATE SET
+        status = EXCLUDED.status,
+        message = EXCLUDED.message,
+        at_ms = EXCLUDED.at_ms`
+    );
+  }
+
+  /** All last-search-error rows (one per indexer that ever failed a search). */
+  static async lastSearchErrors(): Promise<UsenetIndexerLastError[]> {
+    const rows = await getDb().query<{
+      indexer: string;
+      status: number | string | null;
+      message: string;
+      at_ms: number | string;
+    }>(
+      sql`SELECT indexer, status, message, at_ms FROM usenet_indexer_last_search_error`
+    );
+    return rows.map((r) => ({
+      indexer: r.indexer,
+      status: r.status == null ? undefined : Number(r.status),
+      message: r.message,
+      atMs: Number(r.at_ms),
+    }));
+  }
+
+  /** Drops every indexer's row when `indexer` is omitted. */
+  static async deleteLastSearchError(indexer?: string): Promise<number> {
+    const res = await getDb().exec(
+      indexer === undefined
+        ? sql`DELETE FROM usenet_indexer_last_search_error`
+        : sql`DELETE FROM usenet_indexer_last_search_error WHERE indexer = ${indexer}`
     );
     return res.rowCount ?? 0;
   }

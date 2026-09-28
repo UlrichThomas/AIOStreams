@@ -49,27 +49,34 @@ function fmtBucketLabel(ms: number, window: UsenetWindow): string {
 
 const WINDOWS: UsenetWindow[] = ['24h', '7d', '30d', 'all'];
 
-function WindowToggle({
+function SegmentedToggle<T extends string>({
+  options,
   value,
   onChange,
+  label,
 }: {
-  value: UsenetWindow;
-  onChange: (w: UsenetWindow) => void;
+  options: readonly { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  label: string;
 }) {
   return (
-    <div className="flex gap-1">
-      {WINDOWS.map((w) => (
+    <div className="flex gap-1" role="radiogroup" aria-label={label}>
+      {options.map((o) => (
         <button
-          key={w}
-          onClick={() => onChange(w)}
+          key={o.value}
+          type="button"
+          role="radio"
+          aria-checked={value === o.value}
+          onClick={() => onChange(o.value)}
           className={cn(
             'px-2.5 py-1 rounded-md text-xs font-medium border transition-colors',
-            value === w
+            value === o.value
               ? 'border-brand bg-brand/10 text-brand'
               : 'border-[--border] text-[--muted] hover:text-[--foreground]'
           )}
         >
-          {w}
+          {o.label}
         </button>
       ))}
     </div>
@@ -631,30 +638,63 @@ function indexerFailBreakdown(i: UsenetIndexerStatRow): string {
   return parts.join(' · ');
 }
 
-/** Popover shape mirroring {@link ProviderHealthPopover} for grab errors. */
-function indexerErrorInfo(e: NonNullable<UsenetIndexerStatRow['lastError']>): {
-  tone: 'bad' | 'warn';
-  label: string;
-  hint: string;
-} {
-  if (e.status === 401 || e.status === 403) {
+function searchFailBreakdown(i: UsenetIndexerStatRow): string {
+  const other =
+    i.searchFailed - i.searchAuth - i.searchLimited - i.searchTimeout;
+  return [
+    i.searchAuth > 0 && `${i.searchAuth} rejected (auth)`,
+    i.searchLimited > 0 && `${i.searchLimited} rate-limited (429)`,
+    i.searchTimeout > 0 && `${i.searchTimeout} timed out`,
+    other > 0 && `${other} other`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+type IndexerErrorKind = 'grab' | 'search';
+
+/** Popover shape mirroring {@link ProviderHealthPopover} for grab/search errors. */
+function indexerErrorInfo(
+  e: NonNullable<UsenetIndexerStatRow['lastError']>,
+  kind: IndexerErrorKind
+): { tone: 'bad' | 'warn'; label: string; hint: string } {
+  const auth =
+    e.status === 401 || e.status === 403
+      ? true
+      : kind === 'search' && /Error Code: 10[0-4]\b/.test(e.message);
+  const limited =
+    e.status === 429 ||
+    (kind === 'search' && /Error Code: 50[01]\b/.test(e.message));
+  if (auth) {
     return {
       tone: 'bad',
-      label: `Blocked by indexer (HTTP ${e.status})`,
-      hint: 'The indexer refused the NZB download. Check that the API key is valid and the account is in good standing.',
+      label: e.status
+        ? `Blocked by indexer (HTTP ${e.status})`
+        : 'Blocked by indexer',
+      hint:
+        kind === 'search'
+          ? 'The indexer rejected the search. Check the API key.'
+          : 'The indexer refused the NZB download. Check that the API key is valid and the account is in good standing.',
     };
   }
-  if (e.status === 429) {
+  if (limited) {
     return {
       tone: 'warn',
-      label: 'Rate-limited (HTTP 429)',
-      hint: 'The indexer is rate-limiting NZB downloads, usually because the account hit its daily API or grab limit. This normally clears on its own.',
+      label: e.status ? `Rate-limited (HTTP ${e.status})` : 'API limit reached',
+      hint:
+        kind === 'search'
+          ? 'Daily API/search limit reached. Searches resume when the indexer resets its quota.'
+          : 'The indexer is rate-limiting NZB downloads, usually because the account hit its daily API or grab limit. This normally clears on its own.',
     };
   }
+  const verb = kind === 'search' ? 'Search' : 'Grab';
   return {
     tone: 'warn',
-    label: e.status ? `Grab failed (HTTP ${e.status})` : 'Grab failed',
-    hint: 'The most recent NZB download from this indexer did not succeed. If this persists, check the indexer URL and its status page.',
+    label: e.status ? `${verb} failed (HTTP ${e.status})` : `${verb} failed`,
+    hint:
+      kind === 'search'
+        ? 'The most recent search on this indexer did not succeed. If this persists, check the indexer URL and its status page.'
+        : 'The most recent NZB download from this indexer did not succeed. If this persists, check the indexer URL and its status page.',
   };
 }
 
@@ -662,12 +702,14 @@ function IndexerErrorPopover({
   indexer,
   error,
   breakdown,
+  kind = 'grab',
 }: {
   indexer: string;
   error: NonNullable<UsenetIndexerStatRow['lastError']>;
   breakdown?: string;
+  kind?: IndexerErrorKind;
 }) {
-  const info = indexerErrorInfo(error);
+  const info = indexerErrorInfo(error, kind);
   return (
     <Popover
       modal={false}
@@ -699,7 +741,9 @@ function IndexerErrorPopover({
         <p className="text-xs text-[--muted]">{info.hint}</p>
         <div className="rounded-[--radius] bg-[--subtle] p-2 space-y-1">
           <div className="flex items-baseline justify-between gap-2">
-            <span className="text-xs font-medium">Last grab error</span>
+            <span className="text-xs font-medium">
+              {kind === 'search' ? 'Last search error' : 'Last grab error'}
+            </span>
             <span className="text-xs text-[--muted] shrink-0">
               {timeAgo(error.atMs)}
             </span>
@@ -848,6 +892,155 @@ function IndexerTable({
   );
 }
 
+function IndexerSearchTable({
+  indexers,
+  onReset,
+}: {
+  indexers: UsenetIndexerStatRow[];
+  onReset: (target: ResetStatsTarget) => void;
+}) {
+  const rows = indexers.filter((i) => i.searchRequests > 0 || i.results > 0);
+  if (rows.length === 0) {
+    return (
+      <p className="text-sm text-[--muted]">
+        No usenet searches recorded in this window yet.
+      </p>
+    );
+  }
+  return (
+    <div className="overflow-x-auto -mx-4 px-4 lg:mx-0 lg:px-0">
+      <table className="w-full text-sm min-w-[720px]">
+        <thead className="text-[--muted] text-xs uppercase">
+          <tr className="text-left border-b border-[--border]">
+            <th className="py-2 pr-3">Indexer</th>
+            <th
+              className="py-2 px-3 text-right"
+              title="Upstream search calls, one per page and per title query. Cached answers aren't counted."
+            >
+              Requests
+            </th>
+            <th className="py-2 px-3 text-right">Success</th>
+            <th
+              className="py-2 px-3 text-right"
+              title="Successful searches that returned nothing."
+            >
+              Empty
+            </th>
+            <th
+              className="py-2 px-3 text-right"
+              title="Time for the indexer to answer a search, failed calls included."
+            >
+              Avg search
+            </th>
+            <th
+              className="py-2 px-3 text-right"
+              title="Results attributed to this indexer, and the average per search that returned any."
+            >
+              Results
+            </th>
+            <th className="py-2 pl-3 w-8" aria-label="Actions" />
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((i) => {
+            const hasRequests = i.searchRequests > 0;
+            return (
+              <tr key={i.indexer} className="border-b border-[--border]/50">
+                <td className="py-2 pr-3">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">{i.indexer}</span>
+                    {i.lastSearchError &&
+                      Date.now() - i.lastSearchError.atMs <
+                        INDEXER_ERROR_RECENT_MS && (
+                        <IndexerErrorPopover
+                          kind="search"
+                          indexer={i.indexer}
+                          error={i.lastSearchError}
+                          breakdown={
+                            i.searchFailed > 0
+                              ? searchFailBreakdown(i)
+                              : undefined
+                          }
+                        />
+                      )}
+                  </div>
+                </td>
+                <td className="py-2 px-3 text-right tabular-nums">
+                  {hasRequests ? formatCompact(i.searchRequests) : '—'}
+                </td>
+                <td
+                  className={cn(
+                    'py-2 px-3 text-right tabular-nums',
+                    hasRequests &&
+                      1 - i.searchSuccessRate > 0.1 &&
+                      'text-red-400'
+                  )}
+                  title={
+                    i.searchFailed > 0 ? searchFailBreakdown(i) : undefined
+                  }
+                >
+                  {hasRequests ? formatPercent(i.searchSuccessRate) : '—'}
+                </td>
+                <td className="py-2 px-3 text-right tabular-nums text-[--muted]">
+                  {hasRequests ? formatCompact(i.searchEmpty) : '—'}
+                </td>
+                <td className="py-2 px-3 text-right tabular-nums">
+                  {i.avgSearchMs == null
+                    ? '—'
+                    : formatDurationMs(i.avgSearchMs)}
+                </td>
+                <td className="py-2 px-3 text-right tabular-nums">
+                  {i.results > 0 ? (
+                    <>
+                      {formatCompact(i.results)}
+                      {i.avgResults != null && (
+                        <span className="text-[--muted]">
+                          {' '}
+                          · {i.avgResults}/hit
+                        </span>
+                      )}
+                    </>
+                  ) : hasRequests ? (
+                    <span
+                      className="text-[--muted]"
+                      title="Aggregator endpoint: results are credited to the indexers behind it."
+                    >
+                      —
+                    </span>
+                  ) : (
+                    '0'
+                  )}
+                </td>
+                <td className="py-2 pl-3 text-right">
+                  <Tooltip
+                    trigger={
+                      <IconButton
+                        size="sm"
+                        intent="alert-subtle"
+                        icon={<BiEraser />}
+                        onClick={() =>
+                          onReset({
+                            target: 'indexers',
+                            id: i.indexer,
+                            label: i.indexer,
+                          })
+                        }
+                        aria-label="Reset stats for this indexer"
+                      />
+                    }
+                  >
+                    Reset this indexer's recorded stats
+                  </Tooltip>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function ResetAllButton({
   label,
   onClick,
@@ -892,6 +1085,26 @@ function StatsSection({
     .filter((i) => i.grabs > 0)
     .slice(0, 6)
     .map((i) => ({ name: i.indexer, value: i.grabs }));
+  const [indexerView, setIndexerView] = React.useState<'grabs' | 'searches'>(
+    'grabs'
+  );
+  const grabIndexers = data.indexers.filter((i) => i.grabs > 0);
+  const totalResults = data.indexers.reduce((s, i) => s + i.results, 0);
+  const resultsShare = data.indexers
+    .filter((i) => i.results > 0)
+    .sort((a, b) => b.results - a.results)
+    .slice(0, 6)
+    .map((i) => ({ name: i.indexer, value: i.results }));
+  const donut =
+    indexerView === 'grabs'
+      ? { data: grabShare, label: 'grabs', value: totalGrabs }
+      : { data: resultsShare, label: 'results', value: totalResults };
+  const table =
+    indexerView === 'grabs' ? (
+      <IndexerTable indexers={grabIndexers} onReset={onReset} />
+    ) : (
+      <IndexerSearchTable indexers={data.indexers} onReset={onReset} />
+    );
 
   return (
     <div className="space-y-6">
@@ -981,29 +1194,42 @@ function StatsSection({
       </Card>
 
       <Card className="p-4">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between gap-3 mb-3">
           <h3 className="text-sm font-semibold">Indexer performance</h3>
-          <ResetAllButton
-            label="Reset all indexer stats"
-            onClick={() =>
-              onReset({ target: 'indexers', label: 'All indexers' })
-            }
-          />
+          <div className="flex items-center gap-2">
+            <SegmentedToggle
+              label="Indexer metric"
+              options={
+                [
+                  { value: 'grabs', label: 'Grabs' },
+                  { value: 'searches', label: 'Searches' },
+                ] as const
+              }
+              value={indexerView}
+              onChange={setIndexerView}
+            />
+            <ResetAllButton
+              label="Reset all indexer stats"
+              onClick={() =>
+                onReset({ target: 'indexers', label: 'All indexers' })
+              }
+            />
+          </div>
         </div>
-        {grabShare.length > 0 ? (
+        {donut.data.length > 0 ? (
           <div className="grid lg:grid-cols-[1fr,240px] gap-6 items-center">
-            <IndexerTable indexers={data.indexers} onReset={onReset} />
+            {table}
             <div className="mx-auto w-full max-w-[240px] aspect-square">
               <DonutChart
-                data={grabShare}
-                centerLabel="grabs"
-                centerValue={formatCompact(totalGrabs)}
+                data={donut.data}
+                centerLabel={donut.label}
+                centerValue={formatCompact(donut.value)}
                 height={240}
               />
             </div>
           </div>
         ) : (
-          <IndexerTable indexers={data.indexers} onReset={onReset} />
+          table
         )}
       </Card>
     </div>
@@ -1029,7 +1255,12 @@ export function UsenetStatsPage() {
       {/* Window selector lives here (not the page header) so it never squishes
           the heading on narrow screens. */}
       <div className="flex justify-end">
-        <WindowToggle value={window} onChange={setWindow} />
+        <SegmentedToggle
+          label="Time window"
+          options={WINDOWS.map((w) => ({ value: w, label: w }))}
+          value={window}
+          onChange={setWindow}
+        />
       </div>
       <LivePanel />
       <DashboardQueryBoundary
