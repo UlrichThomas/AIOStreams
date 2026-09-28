@@ -25,6 +25,10 @@ import {
   type NabSearchFunction,
   type NabTextField,
 } from './scan.js';
+import {
+  recordSearchOutcome,
+  classifySearchError,
+} from '../../../usenet/integration/search-metrics.js';
 
 // --- Generic Custom Error ---
 export class NabApiError extends Error {
@@ -129,6 +133,23 @@ type NabRequestResult<
   K extends NabRequestKind,
 > = K extends 'caps' ? Capabilities : SearchResponse<N>;
 
+/**
+ * Which indexer an item came from: an aggregator (NZBHydra, Prowlarr) names the
+ * real source per item; a direct indexer doesn't, so the caller's fallback
+ * (the endpoint's caps title) applies.
+ */
+export function nabItemIndexerLabel(
+  item: NewznabSearchResultItem,
+  fallback: string | undefined
+): string | undefined {
+  return (
+    item.newznab?.sourceIndexerName?.toString() ??
+    item.newznab?.hydraIndexerName?.toString() ??
+    item.prowlarrindexer?.name ??
+    fallback
+  );
+}
+
 // --- Connection test ---
 const NAB_TEST_TIMEOUT = 15000;
 
@@ -202,6 +223,8 @@ export class BaseNabApi<N extends NabNamespace> {
   private readonly params: Record<string, string>;
   private readonly userAgent: string;
   private readonly httpProxy: string | undefined;
+  /** caps `server.title`, known once getCapabilities() has resolved. */
+  private serverTitle?: string;
 
   constructor(
     public readonly namespace: N,
@@ -240,11 +263,18 @@ export class BaseNabApi<N extends NabNamespace> {
 
   public async getCapabilities(): Promise<Capabilities> {
     const cacheKey = `${this.baseUrl}${this.apiPath}?t=caps&${JSON.stringify(this.params)}`;
-    return this.capabilitiesCache.wrap(
+    const caps = await this.capabilitiesCache.wrap(
       () => this.request('caps', 'caps', undefined, 3000),
       cacheKey,
       appConfig.builtins.nab.capabilitiesCacheTtl
     );
+    this.serverTitle = caps.server?.title?.trim() || undefined;
+    return caps;
+  }
+
+  /** Metrics label for this endpoint: caps title, else hostname. */
+  private get endpointLabel(): string {
+    return this.serverTitle ?? new URL(this.baseUrl).hostname;
   }
 
   public async search(
@@ -340,15 +370,51 @@ export class BaseNabApi<N extends NabNamespace> {
     timeout?: number
   ): Promise<NabRequestResult<N, K>> {
     const lockKey = `${this.baseUrl}${this.apiPath}?t=${func}&${JSON.stringify(params)}&apikey=${this.apiKey ? getSimpleTextHash(this.apiKey) : ''}&${JSON.stringify(this.params)}`;
+    const measure = kind === 'search' && this.namespace === 'newznab';
     const { result } = await DistributedLock.getInstance().withLock(
       lockKey,
-      () => this._request(func, kind, params, timeout),
+      () =>
+        measure
+          ? this.measured(() => this._request(func, kind, params, timeout))
+          : this._request(func, kind, params, timeout),
       {
         timeout: timeout ?? appConfig.builtins.nab.searchTimeout,
         ttl: (timeout ?? appConfig.builtins.nab.searchTimeout) + 1000,
       }
     );
     return result;
+  }
+
+  /**
+   * Time one real upstream search and record its outcome. Runs only in the
+   * lock holder, so a search shared by concurrent callers is counted once.
+   * Metrics are fire-and-forget: this never changes what the caller gets.
+   */
+  private async measured<T>(run: () => Promise<T>): Promise<T> {
+    const endpoint = this.endpointLabel;
+    const start = Date.now();
+    try {
+      const res = await run();
+      const items = (res as SearchResponse<'newznab'>).results ?? [];
+      recordSearchOutcome({
+        endpoint,
+        ok: true,
+        searchMs: Date.now() - start,
+        itemLabels: items.map(
+          (i) => nabItemIndexerLabel(i, endpoint) ?? endpoint
+        ),
+      });
+      return res;
+    } catch (err) {
+      recordSearchOutcome({
+        endpoint,
+        ok: false,
+        searchMs: Date.now() - start,
+        itemLabels: [],
+        ...classifySearchError(err),
+      });
+      throw err;
+    }
   }
 
   private async _request<K extends NabRequestKind>(
