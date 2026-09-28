@@ -28,7 +28,12 @@ function isIndexerResult(s: ParsedStream): boolean {
  * Streams are the same release when they share a `releaseKey` (size + poster +
  * day fingerprint) or a normalised release name; either link is enough, so an
  * indexer without poster data still matches one with it. Size is left out of
- * the name key because indexers disagree on it.
+ * the name key because indexers disagree on it, so reposts and re-uploads under
+ * the same name count as one release: "unique" means a name (or fingerprint)
+ * no other indexer had, not a distinct upload.
+ *
+ * Only meaningful for a request where every source answered; the caller
+ * skips degraded requests (see `StreamFetcher.fetch`).
  */
 export function uniquenessDeltas(
   streams: readonly ParsedStream[]
@@ -39,10 +44,12 @@ export function uniquenessDeltas(
   streams.filter(isIndexerResult).forEach((s, i) => {
     const node = `s:${i}`;
     dsu.makeSet(node);
-    const name = s.filename ?? s.folderName;
+    const rawName = s.filename ?? s.folderName;
+    // A name that normalises to nothing would link every such stream.
+    const name = rawName ? normaliseReleaseName(rawName) : '';
     const keys = [
       s.releaseKey ? `rk:${s.releaseKey}` : undefined,
-      name ? `name:${normaliseReleaseName(name)}` : undefined,
+      name ? `name:${name}` : undefined,
       s.nzbUrl ? `nzb:${s.nzbUrl}` : undefined,
     ];
     for (const key of keys) if (key) dsu.union(node, key);

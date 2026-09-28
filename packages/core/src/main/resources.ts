@@ -764,7 +764,10 @@ export async function getStreams(
     statistics: addonStatistics,
     dispositions,
     mediaInfoMs: fetcherMediaInfoMs,
-  } = await ctx.fetcher.fetch(supportedAddons, context);
+  } = await ctx.fetcher.fetch(supportedAddons, context, {
+    // A next-episode pre-cache is not a request the user made.
+    recordMetrics: !preCaching,
+  });
   const fetchMs = Date.now() - fetchStart;
 
   if (
