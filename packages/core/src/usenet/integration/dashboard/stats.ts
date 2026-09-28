@@ -94,6 +94,23 @@ export interface UsenetIndexerStatRow {
   avgImportMs: number | null;
   /** Most recent grab-fetch error, regardless of window. */
   lastError?: { status?: number; message: string; atMs: number };
+  searchRequests: number;
+  searchFailed: number;
+  searchEmpty: number;
+  searchAuth: number;
+  searchLimited: number;
+  searchTimeout: number;
+  /** (requests - failed) / requests. */
+  searchSuccessRate: number;
+  /** Mean upstream search time; null when no requests. */
+  avgSearchMs: number | null;
+  results: number;
+  searchHits: number;
+  /** results / searchHits; null when no hits. */
+  avgResults: number | null;
+  /** results / total results across indexers. */
+  resultsShare: number;
+  lastSearchError?: { status?: number; message: string; atMs: number };
 }
 
 export interface UsenetThroughputPoint {
@@ -261,6 +278,7 @@ export interface UsenetStatsResetResult {
   providerBytes: number;
   indexerRows: number;
   indexerGrabs: number;
+  indexerSearches: number;
   lastErrorRows: number;
 }
 
@@ -295,7 +313,7 @@ export async function resetUsenetStats(
     : { rows: 0, articles: 0, bytes: 0 };
   const indexer = touchesIndexers
     ? await UsenetIndexerMetricsRepository.sumScope(indexerScope)
-    : { rows: 0, grabs: 0 };
+    : { rows: 0, grabs: 0, searches: 0 };
 
   // The last-error row carries no hour, so only an unbounded reset can clear it.
   const clearsLastError =
@@ -307,8 +325,13 @@ export async function resetUsenetStats(
       await UsenetMetricsRepository.deleteScope(providerScope);
     if (touchesIndexers)
       await UsenetIndexerMetricsRepository.deleteScope(indexerScope);
-    if (clearsLastError)
-      lastErrorRows = await UsenetIndexerMetricsRepository.deleteLastError(id);
+    if (clearsLastError) {
+      const [grabErrRows, searchErrRows] = await Promise.all([
+        UsenetIndexerMetricsRepository.deleteLastError(id),
+        UsenetIndexerMetricsRepository.deleteLastSearchError(id),
+      ]);
+      lastErrorRows = grabErrRows + searchErrRows;
+    }
     logger.warn(
       {
         username,
@@ -330,6 +353,7 @@ export async function resetUsenetStats(
     providerBytes: provider.bytes,
     indexerRows: indexer.rows,
     indexerGrabs: indexer.grabs,
+    indexerSearches: indexer.searches,
     lastErrorRows,
   };
 }
@@ -404,14 +428,21 @@ export async function getUsenetStatsOverview(
   const { live, pool, cache } = getUsenetLiveStats();
   const poolById = new Map(pool.providers.map((p) => [p.id, p]));
 
-  const [summary, series, firstSeenAt, indexerSummary, indexerErrors] =
-    await Promise.all([
-      UsenetMetricsRepository.summaryByProvider(sinceMs),
-      UsenetMetricsRepository.timeSeries(sinceMs, bucketMs),
-      UsenetMetricsRepository.firstHour(),
-      UsenetIndexerMetricsRepository.summaryByIndexer(sinceMs),
-      UsenetIndexerMetricsRepository.lastErrors(),
-    ]);
+  const [
+    summary,
+    series,
+    firstSeenAt,
+    indexerSummary,
+    indexerErrors,
+    indexerSearchErrors,
+  ] = await Promise.all([
+    UsenetMetricsRepository.summaryByProvider(sinceMs),
+    UsenetMetricsRepository.timeSeries(sinceMs, bucketMs),
+    UsenetMetricsRepository.firstHour(),
+    UsenetIndexerMetricsRepository.summaryByIndexer(sinceMs),
+    UsenetIndexerMetricsRepository.lastErrors(),
+    UsenetIndexerMetricsRepository.lastSearchErrors(),
+  ]);
   const summaryById = new Map(summary.map((s) => [s.providerId, s]));
 
   const totalArticles = summary.reduce((s, p) => s + p.articles, 0);
@@ -498,9 +529,14 @@ export async function getUsenetStatsOverview(
 
   const lastErrorByIndexer = new Map(indexerErrors.map((e) => [e.indexer, e]));
   const totalGrabs = indexerSummary.reduce((s, i) => s + i.grabs, 0);
+  const lastSearchErrorByIndexer = new Map(
+    indexerSearchErrors.map((e) => [e.indexer, e])
+  );
+  const totalResults = indexerSummary.reduce((s, i) => s + i.results, 0);
   const indexers: UsenetIndexerStatRow[] = indexerSummary
     .map((agg) => {
       const err = lastErrorByIndexer.get(agg.indexer);
+      const searchErr = lastSearchErrorByIndexer.get(agg.indexer);
       return {
         indexer: agg.indexer,
         grabs: agg.grabs,
@@ -524,9 +560,42 @@ export async function getUsenetStatsOverview(
         lastError: err
           ? { status: err.status, message: err.message, atMs: err.atMs }
           : undefined,
+        searchRequests: agg.searchRequests,
+        searchFailed: agg.searchFailed,
+        searchEmpty: agg.searchEmpty,
+        searchAuth: agg.searchAuth,
+        searchLimited: agg.searchLimited,
+        searchTimeout: agg.searchTimeout,
+        searchSuccessRate:
+          agg.searchRequests > 0
+            ? (agg.searchRequests - agg.searchFailed) / agg.searchRequests
+            : 0,
+        avgSearchMs:
+          agg.searchRequests > 0
+            ? Math.round(agg.sumSearchMs / agg.searchRequests)
+            : null,
+        results: agg.results,
+        searchHits: agg.searchHits,
+        avgResults:
+          agg.searchHits > 0
+            ? Math.round((agg.results / agg.searchHits) * 10) / 10
+            : null,
+        resultsShare: totalResults > 0 ? agg.results / totalResults : 0,
+        lastSearchError: searchErr
+          ? {
+              status: searchErr.status,
+              message: searchErr.message,
+              atMs: searchErr.atMs,
+            }
+          : undefined,
       };
     })
-    .sort((a, b) => b.grabs - a.grabs);
+    .sort(
+      (a, b) =>
+        b.grabs - a.grabs ||
+        b.searchRequests - a.searchRequests ||
+        b.results - a.results
+    );
 
   const throughput: UsenetThroughputPoint[] = series.map((b) => ({
     bucketMs: b.bucketMs,

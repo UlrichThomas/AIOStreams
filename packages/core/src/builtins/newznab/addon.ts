@@ -10,7 +10,11 @@ import {
 import { SearchMetadata } from '../base/debrid.js';
 import { hashNzbUrl } from '../../debrid/utils.js';
 import { toUnixSeconds, usenetKey } from '../../release-blocklist/index.js';
-import { BaseNabApi, SearchResultItem } from '../base/nab/api.js';
+import {
+  BaseNabApi,
+  nabItemIndexerLabel,
+  SearchResultItem,
+} from '../base/nab/api.js';
 import {
   BaseNabAddon,
   NabAddonConfigSchema,
@@ -197,11 +201,7 @@ export class NewznabAddon extends BaseNabAddon<NewznabAddonConfig, NewznabApi> {
         nzb: nzbUrl,
         age: age,
         title: result.title,
-        indexer:
-          result.newznab?.sourceIndexerName?.toString() ??
-          result.newznab?.hydraIndexerName?.toString() ??
-          result.prowlarrindexer?.name ??
-          meta.capabilities.server.title,
+        indexer: nabItemIndexerLabel(result, meta.capabilities.server.title),
         size:
           result.size ??
           (result.newznab?.size ? Number(result.newznab.size) : undefined) ??
