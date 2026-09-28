@@ -95,7 +95,7 @@ jobs:
           push: true
           context: .
           file: ./Dockerfile
-          outputs: type=image,name=ghcr.io/viren070/aiostreams,push-by-digest=true,name-canonical=true
+          outputs: type=image,name=ghcr.io/ulrichthomas/aiostreams,push-by-digest=true,name-canonical=true
           cache-from: type=gha,scope=${{ matrix.suffix }}
           cache-to: type=gha,mode=max,scope=${{ matrix.suffix }}
 
@@ -139,6 +139,6 @@ jobs:
           TAG: ${{ needs.setup.outputs.tag }}
         run: |
           docker buildx imagetools create \
-            -t "ghcr.io/viren070/aiostreams:${TAG}" \
-            "ghcr.io/viren070/aiostreams@$(cat /tmp/digests/amd64)" \
-            "ghcr.io/viren070/aiostreams@$(cat /tmp/digests/arm64)"
+            -t "ghcr.io/ulrichthomas/aiostreams:${TAG}" \
+            "ghcr.io/ulrichthomas/aiostreams@$(cat /tmp/digests/amd64)" \
+            "ghcr.io/ulrichthomas/aiostreams@$(cat /tmp/digests/arm64)"
