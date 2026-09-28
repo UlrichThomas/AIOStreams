@@ -41,6 +41,7 @@ import { watchStateRating } from './0040_watch_state_rating.js';
 import { indexTrim } from './0041_index_trim.js';
 import { watchAirTimes } from './0042_watch_air_times.js';
 import { usenetIndexerSearch } from './0040_usenet_indexer_search.js';
+import { usenetIndexerUniqueness } from './0041_usenet_indexer_uniqueness.js';
 import type { Migration } from './types.js';
 
 export const MIGRATIONS: readonly Migration[] = [
@@ -87,6 +88,7 @@ export const MIGRATIONS: readonly Migration[] = [
   indexTrim,
   watchAirTimes,
   usenetIndexerSearch,
+  usenetIndexerUniqueness,
 ];
 
 export type { Migration } from './types.js';
