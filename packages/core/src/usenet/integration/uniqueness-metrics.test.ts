@@ -4,6 +4,14 @@ import assert from 'node:assert/strict';
 import '../../index.js';
 import type { ParsedStream } from '../../db/schemas.js';
 import { uniquenessDeltas } from './uniqueness-metrics.js';
+import { normaliseReleaseName } from '../../parser/title.js';
+
+describe('normaliseReleaseName', () => {
+  it('strips a trailing video extension only after a dot', () => {
+    assert.equal(normaliseReleaseName('Show.Parts.mkv'), 'showparts');
+    assert.equal(normaliseReleaseName('Show.Parts'), 'showparts');
+  });
+});
 
 const RK_A = `wd1:${'a'.repeat(32)}`;
 
@@ -106,6 +114,12 @@ describe('uniquenessDeltas', () => {
     ]);
     assert.deepEqual(Object.keys(d), ['A']);
     assert.equal(d.A.uniqSole, 1);
+  });
+
+  it('does not link names that normalise to nothing', () => {
+    const d = byIndexer([nzb('A', '---'), nzb('B', '...')]);
+    assert.equal(d.A.uniqUnique, 1);
+    assert.equal(d.B.uniqUnique, 1);
   });
 
   it('counts stremio-usenet streams', () => {
