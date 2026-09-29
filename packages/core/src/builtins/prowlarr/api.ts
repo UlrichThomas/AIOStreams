@@ -69,9 +69,61 @@ const ProwlarrApiSearchItemSchema = z.object({
 
 const ProwlarrApiSearchSchema = z.array(ProwlarrApiSearchItemSchema);
 
+// Only indexers with a recorded failure or backoff appear here.
+const ProwlarrApiIndexerStatusSchema = z.object({
+  indexerId: z.number(),
+  disabledTill: z.string().nullish(),
+  mostRecentFailure: z.string().nullish(),
+});
+const ProwlarrApiIndexerStatusListSchema = z.array(
+  ProwlarrApiIndexerStatusSchema
+);
+export type ProwlarrApiIndexerStatus = z.infer<
+  typeof ProwlarrApiIndexerStatusSchema
+>;
+
 const logger = createLogger('prowlarr');
 
 export type ProwlarrApiSearchItem = z.infer<typeof ProwlarrApiSearchItemSchema>;
+
+export interface ProwlarrSearchResult {
+  items: ProwlarrApiSearchItem[];
+  /**
+   * An indexer searched was backed off or failed during the search. Prowlarr
+   * drops such indexers from the response without saying so, so the items
+   * are a partial view. Only computed when `trackFailures` was requested.
+   */
+  incomplete: boolean;
+}
+
+/**
+ * Slack for comparing Prowlarr's failure timestamps with our clock, so a
+ * modest skew between the hosts still attributes the failure to this search.
+ */
+const FAILURE_CLOCK_SLACK_MS = 60_000;
+
+/**
+ * Pure: whether any of `indexerIds` failed or was backed off for a search
+ * that started at `searchStartMs` (our clock).
+ */
+export function searchWasIncomplete(
+  statuses: readonly ProwlarrApiIndexerStatus[],
+  indexerIds: readonly number[],
+  searchStartMs: number
+): boolean {
+  const ids = new Set(indexerIds);
+  const since = searchStartMs - FAILURE_CLOCK_SLACK_MS;
+  return statuses.some((s) => {
+    if (!ids.has(s.indexerId)) return false;
+    const disabledTill = s.disabledTill ? Date.parse(s.disabledTill) : NaN;
+    // Prowlarr skips backed-off indexers when searching.
+    if (disabledTill > searchStartMs) return true;
+    const failedAt = s.mostRecentFailure
+      ? Date.parse(s.mostRecentFailure)
+      : NaN;
+    return failedAt >= since;
+  });
+}
 
 class ProwlarrApi {
   private readonly baseUrl: string;
@@ -79,12 +131,12 @@ class ProwlarrApi {
 
   private readonly baseApiPath = '/api/v1';
 
-  // v2: the cached value is the result list, no longer wrapped with the
-  // upstream response headers.
+  // v3: the cached value carries whether the search was incomplete, so a
+  // cache hit reports the state of the search that produced it.
   private readonly searchCache = Cache.getInstance<
     string,
-    ProwlarrApiSearchItem[]
-  >('prowlarr-api:search:v2');
+    ProwlarrSearchResult
+  >('prowlarr-api:search:v3');
 
   private readonly indexersCache = Cache.getInstance<
     string,
@@ -136,28 +188,42 @@ class ProwlarrApi {
     );
   }
 
+  /** Indexers with a recorded failure or backoff. Never cached. */
+  async indexerStatus(): Promise<ProwlarrApiIndexerStatus[]> {
+    return this.request<ProwlarrApiIndexerStatus[]>(
+      'indexerstatus',
+      {},
+      ProwlarrApiIndexerStatusListSchema,
+      3000
+    );
+  }
+
   async search({
     query,
     indexerIds,
     type,
     limit,
     offset,
+    trackFailures = false,
   }: {
     query: string;
     indexerIds: number[];
     type: 'search';
     limit?: number;
     offset?: number;
-  }): Promise<ProwlarrApiSearchItem[]> {
-    const cacheKey = `${this.baseUrl}:${type}:${query}:${indexerIds.join(',')}:${limit}:${offset}`;
+    /** Check afterwards whether any indexer failed (see `incomplete`). */
+    trackFailures?: boolean;
+  }): Promise<ProwlarrSearchResult> {
+    const cacheKey = `${this.baseUrl}:${type}:${query}:${indexerIds.join(',')}:${limit}:${offset}:${trackFailures ? 'tracked' : 'untracked'}`;
 
     return searchWithBackgroundRefresh({
       searchCache: this.searchCache,
       searchCacheKey: cacheKey,
       bgCacheKey: `prowlarr:${cacheKey}`,
       cacheTTL: appConfig.builtins.prowlarr.searchCacheTtl,
-      fetchFn: () =>
-        this.request<ProwlarrApiSearchItem[]>(
+      fetchFn: async () => {
+        const start = Date.now();
+        const items = await this.request<ProwlarrApiSearchItem[]>(
           'search',
           {
             query,
@@ -167,10 +233,36 @@ class ProwlarrApi {
             ...(offset !== undefined && { offset }),
           },
           ProwlarrApiSearchSchema
-        ),
-      isEmptyResult: (result) => result.length === 0,
+        );
+        const incomplete = trackFailures
+          ? await this.checkIncomplete(indexerIds, start)
+          : false;
+        return { items, incomplete };
+      },
+      isEmptyResult: (result) => result.items.length === 0,
       logger,
     });
+  }
+
+  private async checkIncomplete(
+    indexerIds: number[],
+    searchStartMs: number
+  ): Promise<boolean> {
+    try {
+      return searchWasIncomplete(
+        await this.indexerStatus(),
+        indexerIds,
+        searchStartMs
+      );
+    } catch (error) {
+      // Unknown: assume the worst. This only withholds the result from
+      // cross-indexer metrics; the items themselves are unaffected.
+      logger.debug(
+        { err: error instanceof Error ? error.message : String(error) },
+        'could not read Prowlarr indexer status'
+      );
+      return true;
+    }
   }
 
   private getPath(endpoint: string) {
