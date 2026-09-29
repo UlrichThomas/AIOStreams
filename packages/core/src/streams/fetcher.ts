@@ -22,6 +22,8 @@ import {
 } from '../analytics/index.js';
 import { resolveRemuxDbMediaInfo } from '../remuxdb/wrap.js';
 import {
+  indexersSearched,
+  isUsenetStream,
   mayReturnUsenet,
   recordUniqueness,
 } from '../usenet/integration/uniqueness-metrics.js';
@@ -103,10 +105,12 @@ class StreamFetcher {
     // Every addon fetch started, so uniqueness can wait for stragglers the
     // dynamic/group paths return without.
     const addonFetches: Promise<unknown>[] = [];
-    // Set when a usenet-capable addon fails, returns error streams, or flags
-    // its search as incomplete: its results are missing, which would make
-    // everyone else's look unique.
+    // Set when a usenet source lost results (it failed, or its search report
+    // says so): the missing releases would make everyone else's look unique.
     let fetchDegraded = false;
+    // Indexers the usenet sources searched, so a request with only one
+    // competitor stays out of the uniqueness metrics.
+    let searchedIndexers = 0;
     let remuxDbMs = 0;
     const start = Date.now();
 
@@ -152,7 +156,12 @@ class StreamFetcher {
       const start = Date.now();
 
       try {
-        const streams = await new Wrapper(addon).getStreams(type, id);
+        const fetched = await new Wrapper(addon).getStreams(type, id);
+        // A builtin's search report is for the metrics only: never an error.
+        const report = fetched.find((s) => s.searchReport)?.searchReport;
+        const streams = report
+          ? fetched.filter((s) => !s.searchReport)
+          : fetched;
         const errorStreams = streams.filter(
           (s) => s.type === constants.ERROR_STREAM_TYPE
         );
@@ -163,14 +172,17 @@ class StreamFetcher {
         const usableStreams = streams.filter(
           (s) => s.type !== constants.ERROR_STREAM_TYPE
         );
-        if (errorStreams.length > 0 && mayReturnUsenet(addon))
+        // A report says whether the errors cost usenet results; without one,
+        // any error from a source that could return usenet counts.
+        if (
+          report
+            ? report.incomplete
+            : errorStreams.length > 0 && mayReturnUsenet(addon)
+        )
           fetchDegraded = true;
-        for (const s of usableStreams) {
-          if (s.type === 'usenet' || s.type === 'stremio-usenet') {
-            rawUsenet.push(s);
-            if (s.searchIncomplete) fetchDegraded = true;
-          }
-        }
+        const addonUsenet = usableStreams.filter(isUsenetStream);
+        rawUsenet.push(...addonUsenet);
+        searchedIndexers += indexersSearched(addonUsenet, report?.indexers);
         const latencyMs = Date.now() - start;
         const status: AnalyticsStatus =
           errorStreams.length > 0 && usableStreams.length === 0
@@ -725,7 +737,7 @@ class StreamFetcher {
       // of the indexers that did answer.
       void Promise.allSettled(addonFetches).then(() => {
         if (fetchDegraded) return;
-        recordUniqueness(rawUsenet);
+        recordUniqueness(rawUsenet, searchedIndexers);
       });
     }
     return {

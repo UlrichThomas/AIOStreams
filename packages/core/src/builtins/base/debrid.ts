@@ -3,6 +3,7 @@
   Manifest,
   Meta,
   NNTPServersSchema,
+  SearchReport,
   Stream,
 } from '../../db/schemas.js';
 import { z, ZodError } from 'zod';
@@ -137,6 +138,17 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
   protected _searchMetadataPromise: Promise<SearchMetadata> | null = null;
 
   /**
+   * Set by `_searchNzbs` when it can say more about its indexer search: how
+   * many indexers it covered, and whether one silently dropped out.
+   * `incomplete` may still be pending; it is only awaited once the results
+   * are processed. See `_createSearchReportStream`.
+   */
+  protected usenetSearchReport?: {
+    incomplete: boolean | Promise<boolean>;
+    indexers?: number;
+  };
+
+  /**
    * Await the search metadata promise. Must be called within _searchTorrents
    * or _searchNzbs when the implementation actually needs the metadata.
    */
@@ -182,6 +194,9 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
   public async getStreams(type: string, id: string): Promise<Stream[]> {
     const parsedId = IdParser.parse(id, type);
     const errorStreams: Stream[] = [];
+    // Usenet results were lost to an error (not a torrent one), so the
+    // indexer uniqueness metrics must not trust this response.
+    let usenetFailed = false;
     if (!parsedId || !this.supportedIdTypes.includes(parsedId.type)) {
       throw new Error(`Unsupported ID: ${id}`);
     }
@@ -239,6 +254,7 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
       );
     }
     if (searchPromises[1].status === 'rejected') {
+      usenetFailed = true;
       errorStreams.push(
         this._createErrorStream({
           title: `${this.name}`,
@@ -320,6 +336,7 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
         )
       )
     ) {
+      usenetFailed = true;
       errorStreams.push(
         this._createErrorStream({
           title: `${this.name}`,
@@ -434,6 +451,9 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
     );
     resultStreams = proxied.streams;
     errorStreams.push(...proxied.errorStreams);
+    // Proxying only covers the usenet services (NzbDAV, AltMount).
+    if (proxied.errorStreams.length > 0) usenetFailed = true;
+    if (processedNzbs.errors.length > 0) usenetFailed = true;
 
     [...processedTorrents.errors, ...processedNzbs.errors].forEach((error) => {
       let errMsg = error.error.message;
@@ -451,7 +471,42 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
       );
     });
 
-    return [...resultStreams, ...errorStreams];
+    return [
+      ...resultStreams,
+      ...errorStreams,
+      await this._createSearchReportStream(usenetFailed),
+    ];
+  }
+
+  /**
+   * A marker telling the engine how the usenet side of this request went, so
+   * the indexer uniqueness metrics can tell a usenet failure from, say, a
+   * torrent one. Shaped as an error stream so the parser skips all release
+   * parsing for it; the fetcher removes it before errors are collected, so it
+   * is never shown.
+   */
+  protected async _createSearchReportStream(
+    usenetFailed: boolean
+  ): Promise<Stream> {
+    let incomplete = usenetFailed;
+    if (this.usenetSearchReport) {
+      try {
+        if (await this.usenetSearchReport.incomplete) incomplete = true;
+      } catch {
+        incomplete = true;
+      }
+    }
+    const searchReport: SearchReport = {
+      incomplete,
+      indexers: this.usenetSearchReport?.indexers,
+    };
+    return {
+      ...this._createErrorStream({
+        title: this.name,
+        description: 'Search report',
+      }),
+      searchReport,
+    };
   }
 
   protected getTorrentServices(): T['services'] {
@@ -943,10 +998,6 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
       releaseKey:
         torrentOrNzb.type === 'usenet' ? torrentOrNzb.releaseKey : undefined,
       idMatched: torrentOrNzb.confirmed === true ? true : undefined,
-      searchIncomplete:
-        torrentOrNzb.type === 'usenet' && torrentOrNzb.searchIncomplete
-          ? true
-          : undefined,
       servers:
         torrentOrNzb.service?.id === 'stremio_nntp'
           ? (encryptedStoreAuth as string[])

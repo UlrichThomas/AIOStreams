@@ -213,8 +213,6 @@ export interface NZB extends BaseFile {
   zyclopsHealth?: string;
   serviceItemId?: string;
   releaseKey?: string;
-  /** The search that found this missed an indexer (see `ParsedStream.searchIncomplete`). */
-  searchIncomplete?: boolean;
 }
 
 export interface TorrentWithSelectedFile extends Torrent {
