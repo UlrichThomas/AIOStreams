@@ -179,15 +179,16 @@ export class ProwlarrAddon extends BaseDebridAddon<ProwlarrAddonConfig> {
    * @param protocol - The protocol type ('torrent' or 'usenet')
    * @param parsedId - The parsed content ID
    * @param metadata - Search metadata
-   * @returns Search results from Prowlarr, and whether any query was
-   *   incomplete (only tracked for usenet)
+   * @returns Search results from Prowlarr, whether any query was incomplete
+   *   (only tracked for usenet; may be pending), and how many indexers were
+   *   searched (0 when no search ran)
    */
   private async performSearch(
     protocol: 'torrent' | 'usenet',
     parsedId: ParsedId,
     metadata: SearchMetadata
-  ): Promise<ProwlarrSearchResult> {
-    const none: ProwlarrSearchResult = { items: [], incomplete: false };
+  ): Promise<ProwlarrSearchResult & { indexers: number }> {
+    const none = { items: [], incomplete: false, indexers: 0 };
     if (this.sources.length > 0 && !this.sources.includes(protocol)) {
       return none;
     }
@@ -223,7 +224,6 @@ export class ProwlarrAddon extends BaseDebridAddon<ProwlarrAddonConfig> {
           `Prowlarr ${protocol} search for ${q} took ${getTimeTakenSincePoint(start)}`,
           {
             results: data.items.length,
-            incomplete: data.incomplete,
           }
         );
         return data;
@@ -232,7 +232,10 @@ export class ProwlarrAddon extends BaseDebridAddon<ProwlarrAddonConfig> {
     const allResults = await Promise.all(searchPromises);
     return {
       items: allResults.flatMap((r) => r.items),
-      incomplete: allResults.some((r) => r.incomplete),
+      incomplete: Promise.all(allResults.map((r) => r.incomplete)).then(
+        (flags) => flags.some(Boolean)
+      ),
+      indexers: chosenIndexers.length,
     };
   }
 
@@ -283,21 +286,13 @@ export class ProwlarrAddon extends BaseDebridAddon<ProwlarrAddonConfig> {
 
   protected async _searchNzbs(parsedId: ParsedId): Promise<NZB[]> {
     const metadata = await this.getSearchMetadata();
-    const { items: results, incomplete } = await this.performSearch(
-      'usenet',
-      parsedId,
-      metadata
-    );
-    if (results.length === 0) {
-      // Nothing to carry the flag on, so surface it as an error: the empty
-      // result may just be the indexers that failed.
-      if (incomplete) {
-        throw new Error(
-          'Search incomplete: one or more Prowlarr indexers failed or are backed off'
-        );
-      }
-      return [];
-    }
+    const {
+      items: results,
+      incomplete,
+      indexers,
+    } = await this.performSearch('usenet', parsedId, metadata);
+    if (indexers > 0) this.usenetSearchReport = { incomplete, indexers };
+    if (results.length === 0) return [];
 
     const seenNzbs = new Set<string>();
     const nzbs: NZB[] = [];
@@ -318,7 +313,6 @@ export class ProwlarrAddon extends BaseDebridAddon<ProwlarrAddonConfig> {
         size: result.size,
         indexer: result.indexer,
         type: 'usenet',
-        searchIncomplete: incomplete || undefined,
       });
     }
     return nzbs;
