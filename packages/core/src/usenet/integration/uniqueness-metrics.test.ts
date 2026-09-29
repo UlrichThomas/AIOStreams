@@ -5,6 +5,7 @@ import '../../index.js';
 import type { Addon, ParsedStream } from '../../db/schemas.js';
 import {
   declaresUsenet,
+  indexersSearched,
   mayReturnUsenet,
   uniquenessDeltas,
 } from './uniqueness-metrics.js';
@@ -34,15 +35,27 @@ function nzb(
   } as unknown as ParsedStream;
 }
 
-function byIndexer(streams: ParsedStream[]) {
+// Two indexers searched unless a test says otherwise, so a lone answering
+// indexer still has a competitor.
+function byIndexer(streams: ParsedStream[], searched = 2) {
   return Object.fromEntries(
-    uniquenessDeltas(streams).map(({ indexer, ...d }) => [indexer, d])
+    uniquenessDeltas(streams, searched).map(({ indexer, ...d }) => [indexer, d])
   );
 }
 
 describe('uniquenessDeltas', () => {
   it('returns nothing for no qualifying streams', () => {
-    assert.deepEqual(uniquenessDeltas([]), []);
+    assert.deepEqual(uniquenessDeltas([], 5), []);
+  });
+
+  it('records nothing when only one indexer was searched', () => {
+    assert.deepEqual(byIndexer([nzb('A', 'One'), nzb('A', 'Two')], 1), {});
+  });
+
+  it('counts answering indexers when the searched count is unknown', () => {
+    const d = byIndexer([nzb('A', 'One'), nzb('B', 'Two')], 0);
+    assert.equal(d.A.uniqUnique, 1);
+    assert.equal(d.B.uniqUnique, 1);
   });
 
   it('treats a shared releaseKey as the same release', () => {
@@ -133,6 +146,23 @@ describe('uniquenessDeltas', () => {
     ]);
     assert.equal(d.A.uniqUnique, 0);
     assert.equal(d.B.uniqUnique, 0);
+  });
+});
+
+describe('indexersSearched', () => {
+  it('takes a reported count over the indexers that answered', () => {
+    assert.equal(indexersSearched([nzb('A', 'One')], 4), 4);
+  });
+
+  it('falls back to the distinct indexers that answered', () => {
+    assert.equal(
+      indexersSearched([nzb('A', 'One'), nzb('A', 'Two'), nzb('B', 'One')]),
+      2
+    );
+  });
+
+  it('ignores library streams', () => {
+    assert.equal(indexersSearched([nzb('torbox', 'X', { library: true })]), 0);
   });
 });
 

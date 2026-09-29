@@ -1,4 +1,4 @@
-import { ParsedStream, Stream, UserData } from '../db/index.js';
+import { ParsedStream, SearchReport, Stream, UserData } from '../db/index.js';
 import { StreamParser, getRegexForTextAfterEmojis } from '../parser/index.js';
 import FileParser from '../parser/file.js';
 import {
@@ -28,8 +28,8 @@ export class BuiltinStreamParser extends StreamParser {
     return stream.idMatched === true ? true : undefined;
   }
 
-  protected override getSearchIncomplete(stream: Stream): boolean | undefined {
-    return stream.searchIncomplete === true ? true : undefined;
+  protected override getSearchReport(stream: Stream): SearchReport | undefined {
+    return stream.searchReport ?? undefined;
   }
 
   protected override getLanguages(
