@@ -241,6 +241,8 @@ export interface NZB extends BaseFile {
   serviceItemId?: string;
   releaseKey?: string;
   infoUrl?: string;
+  /** The search that found this missed an indexer (see `ParsedStream.searchIncomplete`). */
+  searchIncomplete?: boolean;
 }
 
 export interface TorrentWithSelectedFile extends Torrent {

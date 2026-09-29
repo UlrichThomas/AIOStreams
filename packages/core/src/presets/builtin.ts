@@ -28,6 +28,10 @@ export class BuiltinStreamParser extends StreamParser {
     return stream.idMatched === true ? true : undefined;
   }
 
+  protected override getSearchIncomplete(stream: Stream): boolean | undefined {
+    return stream.searchIncomplete === true ? true : undefined;
+  }
+
   protected override getLanguages(
     stream: Stream,
     currentParsedStream: ParsedStream

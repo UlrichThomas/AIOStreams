@@ -95,6 +95,10 @@ class StreamParser {
     return undefined;
   }
 
+  protected getSearchIncomplete(stream: Stream): boolean | undefined {
+    return undefined;
+  }
+
   parse(stream: Stream): ParsedStream | { skip: true } {
     if (this.shouldSkip(stream)) {
       return { skip: true };
@@ -115,6 +119,7 @@ class StreamParser {
       infoUrl: stream.infoUrl || undefined,
       releaseKey: this.getReleaseKey(stream),
       idMatched: this.getIdMatched(stream),
+      searchIncomplete: this.getSearchIncomplete(stream),
       tarUrls: stream.tarUrls ?? undefined,
       tgzUrls: stream.tgzUrls ?? undefined,
       '7zipUrls': stream['7zipUrls'] ?? undefined,
