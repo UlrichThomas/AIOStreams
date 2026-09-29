@@ -1344,12 +1344,26 @@ export const ReleaseKeySchema = z
   .optional()
   .catch(undefined);
 
+/**
+ * How a builtin's usenet search went. Carried on a marker stream that the
+ * fetcher strips before anything else sees it (see `StreamFetcher.fetch`);
+ * only the indexer uniqueness metrics read it.
+ */
+export const SearchReportSchema = z.object({
+  /** An indexer searched silently dropped out, so the results are partial. */
+  incomplete: z.boolean(),
+  /** How many indexers the search covered, when the builtin knows. */
+  indexers: z.number().int().nonnegative().optional(),
+});
+
+export type SearchReport = z.infer<typeof SearchReportSchema>;
+
 export const StreamSchema = z.looseObject({
   url: z.string().or(z.null()).optional(),
   nzbUrl: z.string().or(z.null()).optional(),
   releaseKey: ReleaseKeySchema,
   idMatched: z.boolean().optional(),
-  searchIncomplete: z.boolean().optional(),
+  searchReport: SearchReportSchema.optional(),
   servers: z.array(z.string().min(1)).nullable().optional(),
   rarUrls: z.array(SourceSchema).nullable().optional(),
   zipUrls: z.array(SourceSchema).nullable().optional(),
@@ -1516,11 +1530,8 @@ export const ParsedStreamSchema = z.object({
   library: z.boolean().optional(),
   /** Upstream matched this release against an ID-indexed source, not a text search. */
   idMatched: z.boolean().optional(),
-  /**
-   * The upstream search that found this silently missed an indexer, so the
-   * result set is partial. Keeps the request out of indexer uniqueness metrics.
-   */
-  searchIncomplete: z.boolean().optional(),
+  /** Set only on a builtin's search report marker, never on a real stream. */
+  searchReport: SearchReportSchema.optional(),
   seadex: z
     .object({
       isBest: z.boolean(),

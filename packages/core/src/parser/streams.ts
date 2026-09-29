@@ -1,5 +1,11 @@
 import bytes from 'bytes';
-import { Stream, ParsedStream, Addon, ParsedFile } from '../db/index.js';
+import {
+  Stream,
+  ParsedStream,
+  Addon,
+  ParsedFile,
+  SearchReport,
+} from '../db/index.js';
 import {
   constants,
   createLogger,
@@ -95,7 +101,7 @@ class StreamParser {
     return undefined;
   }
 
-  protected getSearchIncomplete(stream: Stream): boolean | undefined {
+  protected getSearchReport(stream: Stream): SearchReport | undefined {
     return undefined;
   }
 
@@ -118,7 +124,7 @@ class StreamParser {
       nzbUrl: stream.nzbUrl || undefined,
       releaseKey: this.getReleaseKey(stream),
       idMatched: this.getIdMatched(stream),
-      searchIncomplete: this.getSearchIncomplete(stream),
+      searchReport: this.getSearchReport(stream),
       tarUrls: stream.tarUrls ?? undefined,
       tgzUrls: stream.tgzUrls ?? undefined,
       '7zipUrls': stream['7zipUrls'] ?? undefined,

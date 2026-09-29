@@ -905,8 +905,6 @@ function IndexerSearchTable({
   const rows = indexers.filter(
     (i) => i.searchRequests > 0 || i.results > 0 || i.uniqReleases > 0
   );
-  // With one contributing indexer, unique and sole are trivially 100%.
-  const comparable = rows.filter((i) => i.uniqReleases > 0).length >= 2;
   if (rows.length === 0) {
     return (
       <p className="text-sm text-[--muted]">
@@ -947,7 +945,7 @@ function IndexerSearchTable({
             </th>
             <th
               className="py-2 px-3 text-right"
-              title="Of the distinct releases this indexer returned, the share no other indexer returned for the same request. Raw results, before your filters, compared against the indexers searched in the same request; requests where a usenet source failed are not counted. Needs two or more indexers returning results."
+              title="Of the distinct releases this indexer returned, the share no other indexer returned for the same request. Raw results, before your filters, compared against the indexers searched in the same request; requests where a usenet source failed, or that searched only one indexer, are not counted."
             >
               Unique
             </th>
@@ -1027,12 +1025,12 @@ function IndexerSearchTable({
                 <td
                   className="py-2 px-3 text-right tabular-nums"
                   title={
-                    comparable && i.uniqRequests > 0
+                    i.uniqRequests > 0
                       ? `Only source in ${formatCompact(i.uniqSole)} of ${formatCompact(i.uniqRequests)} requests`
                       : undefined
                   }
                 >
-                  {!comparable || i.uniqueRate == null ? (
+                  {i.uniqueRate == null ? (
                     '—'
                   ) : (
                     <>
