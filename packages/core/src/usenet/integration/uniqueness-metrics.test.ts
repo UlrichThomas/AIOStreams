@@ -2,8 +2,12 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 // Use the normal core entry point to initialise the dependency graph.
 import '../../index.js';
-import type { ParsedStream } from '../../db/schemas.js';
-import { uniquenessDeltas } from './uniqueness-metrics.js';
+import type { Addon, ParsedStream } from '../../db/schemas.js';
+import {
+  declaresUsenet,
+  mayReturnUsenet,
+  uniquenessDeltas,
+} from './uniqueness-metrics.js';
 import { normaliseReleaseName } from '../../parser/title.js';
 
 describe('normaliseReleaseName', () => {
@@ -129,5 +133,27 @@ describe('uniquenessDeltas', () => {
     ]);
     assert.equal(d.A.uniqUnique, 0);
     assert.equal(d.B.uniqUnique, 0);
+  });
+});
+
+describe('declaresUsenet', () => {
+  it('is true for presets that declare a usenet type', () => {
+    assert.equal(declaresUsenet(['usenet']), true);
+    assert.equal(declaresUsenet(['debrid', 'stremio-usenet']), true);
+  });
+
+  it('is false for torrent-only presets', () => {
+    assert.equal(declaresUsenet(['p2p', 'debrid']), false);
+  });
+
+  it('is true for presets that declare nothing', () => {
+    assert.equal(declaresUsenet([]), true);
+  });
+});
+
+describe('mayReturnUsenet', () => {
+  it('is true for a preset that cannot be resolved', () => {
+    const addon = { preset: { type: 'no-such-preset' } } as unknown as Addon;
+    assert.equal(mayReturnUsenet(addon), true);
   });
 });

@@ -947,7 +947,7 @@ function IndexerSearchTable({
             </th>
             <th
               className="py-2 px-3 text-right"
-              title="Of the distinct releases this indexer returned, the share no other indexer returned for the same request. Raw results, before your filters; only requests where every addon answered are counted. Needs two or more indexers returning results."
+              title="Of the distinct releases this indexer returned, the share no other indexer returned for the same request. Raw results, before your filters, compared against the indexers searched in the same request; requests where a usenet source failed are not counted. Needs two or more indexers returning results."
             >
               Unique
             </th>

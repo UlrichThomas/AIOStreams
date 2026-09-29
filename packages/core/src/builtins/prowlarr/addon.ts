@@ -4,8 +4,8 @@ import { createLogger, getTimeTakenSincePoint } from '../../utils/index.js';
 import { config as appConfig } from '../../config/index.js';
 import ProwlarrApi, {
   ProwlarrApiIndexer,
-  ProwlarrApiSearchItem,
   ProwlarrApiError,
+  ProwlarrSearchResult,
   ProwlarrApiTagItem,
 } from './api.js';
 import { ParsedId } from '../../utils/id-parser.js';
@@ -179,15 +179,17 @@ export class ProwlarrAddon extends BaseDebridAddon<ProwlarrAddonConfig> {
    * @param protocol - The protocol type ('torrent' or 'usenet')
    * @param parsedId - The parsed content ID
    * @param metadata - Search metadata
-   * @returns Array of search results from Prowlarr
+   * @returns Search results from Prowlarr, and whether any query was
+   *   incomplete (only tracked for usenet)
    */
   private async performSearch(
     protocol: 'torrent' | 'usenet',
     parsedId: ParsedId,
     metadata: SearchMetadata
-  ): Promise<ProwlarrApiSearchItem[]> {
+  ): Promise<ProwlarrSearchResult> {
+    const none: ProwlarrSearchResult = { items: [], incomplete: false };
     if (this.sources.length > 0 && !this.sources.includes(protocol)) {
-      return [];
+      return none;
     }
 
     const queryLimit = createQueryLimit();
@@ -195,14 +197,14 @@ export class ProwlarrAddon extends BaseDebridAddon<ProwlarrAddonConfig> {
 
     if (chosenIndexers.length === 0) {
       this.logger.warn(`No ${protocol} indexers available`);
-      return [];
+      return none;
     }
 
     const queries = this.buildQueries(parsedId, metadata, {
       titleLanguages: getTitleLanguagesForUrl(this.userData.url, this.id),
     });
     if (queries.length === 0) {
-      return [];
+      return none;
     }
 
     const searchPromises = queries.map((q) =>
@@ -213,25 +215,36 @@ export class ProwlarrAddon extends BaseDebridAddon<ProwlarrAddonConfig> {
           indexerIds: chosenIndexers.map((indexer) => indexer.id),
           type: 'search',
           limit: 2000,
+          // Usenet results feed the per-indexer uniqueness metrics, which
+          // need to know when an indexer silently dropped out.
+          trackFailures: protocol === 'usenet',
         });
         this.logger.info(
           `Prowlarr ${protocol} search for ${q} took ${getTimeTakenSincePoint(start)}`,
           {
-            results: data.length,
+            results: data.items.length,
+            incomplete: data.incomplete,
           }
         );
         return data;
       })
     );
     const allResults = await Promise.all(searchPromises);
-    return allResults.flat();
+    return {
+      items: allResults.flatMap((r) => r.items),
+      incomplete: allResults.some((r) => r.incomplete),
+    };
   }
 
   protected async _searchTorrents(
     parsedId: ParsedId
   ): Promise<UnprocessedTorrent[]> {
     const metadata = await this.getSearchMetadata();
-    const results = await this.performSearch('torrent', parsedId, metadata);
+    const { items: results } = await this.performSearch(
+      'torrent',
+      parsedId,
+      metadata
+    );
     if (results.length === 0) return [];
 
     const seenTorrents = new Set<string>();
@@ -270,8 +283,21 @@ export class ProwlarrAddon extends BaseDebridAddon<ProwlarrAddonConfig> {
 
   protected async _searchNzbs(parsedId: ParsedId): Promise<NZB[]> {
     const metadata = await this.getSearchMetadata();
-    const results = await this.performSearch('usenet', parsedId, metadata);
-    if (results.length === 0) return [];
+    const { items: results, incomplete } = await this.performSearch(
+      'usenet',
+      parsedId,
+      metadata
+    );
+    if (results.length === 0) {
+      // Nothing to carry the flag on, so surface it as an error: the empty
+      // result may just be the indexers that failed.
+      if (incomplete) {
+        throw new Error(
+          'Search incomplete: one or more Prowlarr indexers failed or are backed off'
+        );
+      }
+      return [];
+    }
 
     const seenNzbs = new Set<string>();
     const nzbs: NZB[] = [];
@@ -292,6 +318,7 @@ export class ProwlarrAddon extends BaseDebridAddon<ProwlarrAddonConfig> {
         size: result.size,
         indexer: result.indexer,
         type: 'usenet',
+        searchIncomplete: incomplete || undefined,
       });
     }
     return nzbs;

@@ -1337,6 +1337,7 @@ export const StreamSchema = z.looseObject({
   nzbUrl: z.string().or(z.null()).optional(),
   releaseKey: ReleaseKeySchema,
   idMatched: z.boolean().optional(),
+  searchIncomplete: z.boolean().optional(),
   servers: z.array(z.string().min(1)).nullable().optional(),
   rarUrls: z.array(SourceSchema).nullable().optional(),
   zipUrls: z.array(SourceSchema).nullable().optional(),
@@ -1503,6 +1504,11 @@ export const ParsedStreamSchema = z.object({
   library: z.boolean().optional(),
   /** Upstream matched this release against an ID-indexed source, not a text search. */
   idMatched: z.boolean().optional(),
+  /**
+   * The upstream search that found this silently missed an indexer, so the
+   * result set is partial. Keeps the request out of indexer uniqueness metrics.
+   */
+  searchIncomplete: z.boolean().optional(),
   seadex: z
     .object({
       isBest: z.boolean(),

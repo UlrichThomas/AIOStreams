@@ -21,7 +21,10 @@ import {
   type AnalyticsStatus,
 } from '../analytics/index.js';
 import { resolveRemuxDbMediaInfo } from '../remuxdb/wrap.js';
-import { recordUniqueness } from '../usenet/integration/uniqueness-metrics.js';
+import {
+  mayReturnUsenet,
+  recordUniqueness,
+} from '../usenet/integration/uniqueness-metrics.js';
 
 /**
  * Per-addon outcome tracked through {@link StreamFetcher.fetch} and surfaced
@@ -100,8 +103,9 @@ class StreamFetcher {
     // Every addon fetch started, so uniqueness can wait for stragglers the
     // dynamic/group paths return without.
     const addonFetches: Promise<unknown>[] = [];
-    // Set when an addon fails or returns error streams: its results are
-    // missing, which would make everyone else's look unique.
+    // Set when a usenet-capable addon fails, returns error streams, or flags
+    // its search as incomplete: its results are missing, which would make
+    // everyone else's look unique.
     let fetchDegraded = false;
     let remuxDbMs = 0;
     const start = Date.now();
@@ -159,10 +163,13 @@ class StreamFetcher {
         const usableStreams = streams.filter(
           (s) => s.type !== constants.ERROR_STREAM_TYPE
         );
-        if (errorStreams.length > 0) fetchDegraded = true;
+        if (errorStreams.length > 0 && mayReturnUsenet(addon))
+          fetchDegraded = true;
         for (const s of usableStreams) {
-          if (s.type === 'usenet' || s.type === 'stremio-usenet')
+          if (s.type === 'usenet' || s.type === 'stremio-usenet') {
             rawUsenet.push(s);
+            if (s.searchIncomplete) fetchDegraded = true;
+          }
         }
         const latencyMs = Date.now() - start;
         const status: AnalyticsStatus =
@@ -230,7 +237,7 @@ class StreamFetcher {
         };
         const { error_kind } = classifyAddonError('stream', error);
         const took = Date.now() - start;
-        fetchDegraded = true;
+        if (mayReturnUsenet(addon)) fetchDegraded = true;
         dispositions.set(addon.manifestUrl, {
           addon,
           disposition: 'error',
@@ -710,12 +717,14 @@ class StreamFetcher {
     }
     if (options.recordMetrics !== false) {
       // Record once every started fetch has settled, so late results still
-      // count. Skip requests where an addon was never queried or failed: the
-      // releases it would have returned are missing, which inflates the
-      // unique/sole numbers of the indexers that did answer.
-      const queried = addonFetches.length;
+      // count. Addons a group condition skipped are left out of the
+      // comparison rather than skipping the request: requiring every group
+      // would sample only requests where the earlier groups did badly.
+      // Skip requests where a usenet source failed: the releases it would
+      // have returned are missing, which inflates the unique/sole numbers
+      // of the indexers that did answer.
       void Promise.allSettled(addonFetches).then(() => {
-        if (queried < addons.length || fetchDegraded) return;
+        if (fetchDegraded) return;
         recordUniqueness(rawUsenet);
       });
     }
