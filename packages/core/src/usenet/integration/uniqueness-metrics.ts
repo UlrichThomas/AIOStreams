@@ -52,16 +52,35 @@ export function mayReturnUsenet(addon: Addon): boolean {
   }
 }
 
+export function isUsenetStream(s: ParsedStream): boolean {
+  return USENET_TYPES.includes(s.type);
+}
+
 /**
  * Usenet streams that name the indexer that found them. Library NZBs are out:
  * they carry the service id as their "indexer", not a real one.
  */
 function isIndexerResult(s: ParsedStream): boolean {
-  return (
-    (s.type === 'usenet' || s.type === 'stremio-usenet') &&
-    !!s.indexer?.trim() &&
-    !s.library
-  );
+  return isUsenetStream(s) && !!s.indexer?.trim() && !s.library;
+}
+
+/** Distinct indexers with results among `streams`. */
+function answeringIndexers(streams: readonly ParsedStream[]): number {
+  return new Set(
+    streams.filter(isIndexerResult).map((s) => indexerLabelFor(s.indexer))
+  ).size;
+}
+
+/**
+ * Pure: how many indexers one source searched. A builtin that reports its
+ * count is taken at its word (it may have searched indexers that found
+ * nothing); for any other source only the indexers that answered are known.
+ */
+export function indexersSearched(
+  streams: readonly ParsedStream[],
+  reported?: number
+): number {
+  return Math.max(reported ?? 0, answeringIndexers(streams));
 }
 
 /**
@@ -78,9 +97,15 @@ function isIndexerResult(s: ParsedStream): boolean {
  * (addons skipped by media type or a group condition are not competitors).
  * Only meaningful when every usenet source searched answered in full; the
  * caller skips degraded requests (see `StreamFetcher.fetch`).
+ *
+ * `searched` is how many indexers the request searched. With fewer than two
+ * there is no competitor, and every release would count as unique and every
+ * request as sole-source, so nothing is recorded: otherwise single-indexer
+ * setups would drown out the comparison the metric is for.
  */
 export function uniquenessDeltas(
-  streams: readonly ParsedStream[]
+  streams: readonly ParsedStream[],
+  searched: number
 ): UsenetIndexerDelta[] {
   const dsu = new DSU<string>();
   const keysByStream: { indexer: string; node: string }[] = [];
@@ -100,6 +125,7 @@ export function uniquenessDeltas(
     keysByStream.push({ indexer: indexerLabelFor(s.indexer), node });
   });
   if (keysByStream.length === 0) return [];
+  if (Math.max(searched, answeringIndexers(streams)) < 2) return [];
 
   const releasesByIndexer = new Map<string, Set<string>>();
   const indexersByRelease = new Map<string, Set<string>>();
@@ -129,10 +155,13 @@ export function uniquenessDeltas(
 }
 
 /** Fire-and-forget: never lets metrics affect the stream request. */
-export function recordUniqueness(streams: readonly ParsedStream[]): void {
+export function recordUniqueness(
+  streams: readonly ParsedStream[],
+  searched: number
+): void {
   try {
     const atMs = Date.now();
-    for (const d of uniquenessDeltas(streams)) {
+    for (const d of uniquenessDeltas(streams, searched)) {
       UsenetIndexerMetricsRepository.record(d, atMs).catch((err) =>
         logger.warn(
           { err, indexer: d.indexer },

@@ -222,6 +222,12 @@ interface SearchWithBgRefreshOptions<T> {
   fetchFn: () => Promise<T>;
   isEmptyResult: (result: T) => boolean;
   logger: Logger;
+  /**
+   * Settles a fresh result into the value to cache. When given, a fresh
+   * result is returned as soon as `fetchFn` resolves and cached once this
+   * settles, so slow follow-up work stays off the caller's path.
+   */
+  finalise?: (result: T) => Promise<T>;
 }
 
 /**
@@ -250,6 +256,7 @@ export async function searchWithBackgroundRefresh<T>(
     fetchFn,
     isEmptyResult,
     logger,
+    finalise,
   } = options;
 
   const cachedResult = await searchCache.get(searchCacheKey);
@@ -263,20 +270,34 @@ export async function searchWithBackgroundRefresh<T>(
       fetchFn,
       isEmptyResult,
       logger,
+      finalise,
     });
     return cachedResult;
   }
 
   const result = await fetchFn();
 
-  // Don't cache empty results
-  if (!isEmptyResult(result)) {
-    await searchCache.set(searchCacheKey, result, cacheTTL);
+  const store = async (value: T) => {
+    // Don't cache empty results
+    if (isEmptyResult(value)) return;
+    await searchCache.set(searchCacheKey, value, cacheTTL);
     await bgRefreshCache.set(
       bgCacheKey,
       Date.now(),
       appConfig.builtins.torrent.minimumBackgroundRefreshInterval
     );
+  };
+
+  if (finalise) {
+    finalise(result)
+      .then(store)
+      .catch((error) =>
+        logger.error(
+          `Failed to cache search result for: ${searchCacheKey} - ${error instanceof Error ? error.message : 'Unknown error'}`
+        )
+      );
+  } else {
+    await store(result);
   }
 
   return result;
@@ -294,6 +315,7 @@ function triggerBackgroundRefresh<T>(options: {
   fetchFn: () => Promise<T>;
   isEmptyResult: (result: T) => boolean;
   logger: Logger;
+  finalise?: (result: T) => Promise<T>;
 }): void {
   const {
     searchCacheKey,
@@ -303,6 +325,7 @@ function triggerBackgroundRefresh<T>(options: {
     fetchFn,
     isEmptyResult,
     logger,
+    finalise,
   } = options;
 
   (async () => {
@@ -319,7 +342,8 @@ function triggerBackgroundRefresh<T>(options: {
 
       // Perform background refresh
       logger.debug(`Starting background refresh for: ${searchCacheKey}`);
-      const freshResult = await fetchFn();
+      const fetched = await fetchFn();
+      const freshResult = finalise ? await finalise(fetched) : fetched;
 
       // Update cache if result is not empty
       if (!isEmptyResult(freshResult)) {

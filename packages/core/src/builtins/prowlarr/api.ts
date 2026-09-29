@@ -93,8 +93,10 @@ export interface ProwlarrSearchResult {
    * An indexer searched was backed off or failed during the search. Prowlarr
    * drops such indexers from the response without saying so, so the items
    * are a partial view. Only computed when `trackFailures` was requested.
+   * Pending on a fresh search, so the caller can use the items first; always
+   * settled in the cache.
    */
-  incomplete: boolean;
+  incomplete: boolean | Promise<boolean>;
 }
 
 /**
@@ -133,7 +135,8 @@ class ProwlarrApi {
   private readonly baseApiPath = '/api/v1';
 
   // v3: the cached value carries whether the search was incomplete, so a
-  // cache hit reports the state of the search that produced it.
+  // cache hit reports the state of the search that produced it. Only settled
+  // values are cached (see `finalise` in `search`).
   private readonly searchCache = Cache.getInstance<
     string,
     ProwlarrSearchResult
@@ -235,12 +238,18 @@ class ProwlarrApi {
           },
           ProwlarrApiSearchSchema
         );
+        // Not awaited: the status read runs while the caller processes the
+        // items, rather than delaying them.
         const incomplete = trackFailures
-          ? await this.checkIncomplete(indexerIds, start)
+          ? this.checkIncomplete(indexerIds, start)
           : false;
         return { items, incomplete };
       },
       isEmptyResult: (result) => result.items.length === 0,
+      finalise: async (result) => ({
+        items: result.items,
+        incomplete: await result.incomplete,
+      }),
       logger,
     });
   }
@@ -256,8 +265,8 @@ class ProwlarrApi {
         searchStartMs
       );
     } catch (error) {
-      // Unknown: assume the worst. This only withholds the result from
-      // cross-indexer metrics; the items themselves are unaffected.
+      // Unknown: assume the worst. This only keeps the request out of the
+      // indexer uniqueness metrics; the items themselves are unaffected.
       logger.debug(
         { err: error instanceof Error ? error.message : String(error) },
         'could not read Prowlarr indexer status'
