@@ -46,11 +46,16 @@ function sinceMsFor(range: string): number | undefined {
     : hourFloor(Date.now()) - (hours - 1) * HOUR_MS;
 }
 
+/** Every hourly row a reset removes, quality-mix rows included. */
+function rowsOf(r: UsenetStatsResetResult): number {
+  return r.providerRows + r.indexerRows + r.indexerQualityRows;
+}
+
 function impactOf(
   target: UsenetStatsResetTarget,
   r: UsenetStatsResetResult
 ): string {
-  const rows = r.providerRows + r.indexerRows;
+  const rows = rowsOf(r);
   if (rows === 0) return 'Nothing recorded in this range.';
   const detail: string[] = [];
   if (target !== 'indexers' && r.providerRows > 0) {
@@ -63,6 +68,9 @@ function impactOf(
       `${formatCompact(r.indexerGrabs)} grabs`,
       `${formatCompact(r.indexerSearches)} searches`
     );
+  }
+  if (target !== 'providers' && r.indexerQualityRows > 0) {
+    detail.push('quality mix');
   }
   const plural = rows === 1 ? 'row' : 'rows';
   return `Removes ${formatCompact(rows)} hourly ${plural}${
@@ -125,7 +133,7 @@ export function ResetStatsModal({
         id: target.id,
         sinceMs: sinceMsFor(range),
       });
-      const rows = r.providerRows + r.indexerRows;
+      const rows = rowsOf(r);
       toast.success(
         rows === 0
           ? 'Nothing to reset'
@@ -149,7 +157,7 @@ export function ResetStatsModal({
           <span className="text-[--foreground]">{target.label}</span>. Charts
           and totals are rebuilt from what is left, and this cannot be undone.
           {target.target !== 'providers' &&
-            ' Indexer grab and search stats share the same rows, so both are removed together.'}
+            ' Indexer grab, search and quality stats are removed together.'}
         </p>
 
         <BasicField label="Range">
@@ -175,7 +183,7 @@ export function ResetStatsModal({
           <Button
             intent="alert"
             loading={commit.isPending}
-            disabled={preview?.providerRows === 0 && preview?.indexerRows === 0}
+            disabled={preview !== null && rowsOf(preview) === 0}
             onClick={submit}
           >
             Reset stats
