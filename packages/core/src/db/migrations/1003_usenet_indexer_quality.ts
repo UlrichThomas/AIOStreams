@@ -8,7 +8,7 @@ import type { Migration } from './types.js';
  * fixed set of columns.
  */
 export const usenetIndexerQuality: Migration = {
-  id: 42,
+  id: 1003,
   name: 'usenet_indexer_quality',
   up: {
     sqlite: `

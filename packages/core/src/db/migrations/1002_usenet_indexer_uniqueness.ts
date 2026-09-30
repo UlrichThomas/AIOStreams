@@ -8,7 +8,7 @@ const COLS = [
 ];
 
 export const usenetIndexerUniqueness: Migration = {
-  id: 41,
+  id: 1002,
   name: 'usenet_indexer_uniqueness',
   up: {
     sqlite: `
