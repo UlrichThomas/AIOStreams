@@ -376,6 +376,7 @@ export interface UsenetStatsResetResult {
   indexerRows: number;
   indexerGrabs: number;
   indexerSearches: number;
+  indexerQualityRows: number;
   lastErrorRows: number;
 }
 

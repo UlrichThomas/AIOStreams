@@ -331,6 +331,8 @@ export interface UsenetStatsResetResult {
   indexerRows: number;
   indexerGrabs: number;
   indexerSearches: number;
+  /** Resolution × quality rows, counted apart from the hourly rollups. */
+  indexerQualityRows: number;
   lastErrorRows: number;
 }
 
@@ -365,7 +367,7 @@ export async function resetUsenetStats(
     : { rows: 0, articles: 0, bytes: 0 };
   const indexer = touchesIndexers
     ? await UsenetIndexerMetricsRepository.sumScope(indexerScope)
-    : { rows: 0, grabs: 0, searches: 0 };
+    : { rows: 0, grabs: 0, searches: 0, qualityRows: 0 };
 
   // The last-error row carries no hour, so only an unbounded reset can clear it.
   const clearsLastError =
@@ -393,6 +395,7 @@ export async function resetUsenetStats(
         untilMs,
         providerRows: provider.rows,
         indexerRows: indexer.rows,
+        indexerQualityRows: indexer.qualityRows,
       },
       'usenet stats reset'
     );
@@ -406,6 +409,7 @@ export async function resetUsenetStats(
     indexerRows: indexer.rows,
     indexerGrabs: indexer.grabs,
     indexerSearches: indexer.searches,
+    indexerQualityRows: indexer.qualityRows,
     lastErrorRows,
   };
 }
