@@ -149,6 +149,14 @@ export interface UsenetIndexerStatRow {
   uniqSole: number;
   uniqueRate: number | null;
   soleRate: number | null;
+  /** Distinct releases per request by resolution × quality (raw results). */
+  qualityMix: UsenetIndexerQualityCell[];
+}
+
+export interface UsenetIndexerQualityCell {
+  resolution: string;
+  quality: string;
+  releases: number;
 }
 
 export interface UsenetStatsOverview {

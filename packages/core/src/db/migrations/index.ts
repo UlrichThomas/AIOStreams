@@ -46,6 +46,7 @@ import { mediaInfoSources } from './0045_media_info_sources.js';
 import { jellyfinUserAddresses } from './0046_jellyfin_user_addresses.js';
 import { usenetIndexerSearch } from './0040_usenet_indexer_search.js';
 import { usenetIndexerUniqueness } from './0041_usenet_indexer_uniqueness.js';
+import { usenetIndexerQuality } from './0042_usenet_indexer_quality.js';
 import type { Migration } from './types.js';
 
 export const MIGRATIONS: readonly Migration[] = [
@@ -97,6 +98,7 @@ export const MIGRATIONS: readonly Migration[] = [
   jellyfinUserAddresses,
   usenetIndexerSearch,
   usenetIndexerUniqueness,
+  usenetIndexerQuality,
 ];
 
 export type { Migration } from './types.js';

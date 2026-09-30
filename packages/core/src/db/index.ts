@@ -48,6 +48,8 @@ export {
   type UsenetIndexerScope,
   type UsenetIndexerRollup,
   type UsenetIndexerLastError,
+  type UsenetIndexerQualityDelta,
+  type UsenetIndexerQualityRow,
 } from './repositories/usenet-indexer-metrics.js';
 export {
   StreamSessionRepository,
