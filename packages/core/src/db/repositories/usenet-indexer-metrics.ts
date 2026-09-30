@@ -69,6 +69,17 @@ export interface UsenetIndexerRollup {
   uniqSole: number;
 }
 
+/** Releases of one resolution × quality an indexer returned, to fold in. */
+export interface UsenetIndexerQualityDelta {
+  indexer: string;
+  resolution: string;
+  quality: string;
+  releases: number;
+}
+
+/** One indexer's resolution × quality total over a window. */
+export type UsenetIndexerQualityRow = UsenetIndexerQualityDelta;
+
 /** Most recent grab-fetch error for an indexer (diagnostic, not windowed). */
 export interface UsenetIndexerLastError {
   indexer: string;
@@ -160,6 +171,55 @@ export class UsenetIndexerMetricsRepository {
             uniq_unique = usenet_indexer_metrics.uniq_unique + EXCLUDED.uniq_unique,
             uniq_sole = usenet_indexer_metrics.uniq_sole + EXCLUDED.uniq_sole`
     );
+  }
+
+  /**
+   * Fold one request's resolution × quality counts into the hour bucket
+   * containing `atMs`. Deltas must have distinct keys: postgres rejects an
+   * upsert that touches the same row twice.
+   */
+  static async recordQuality(
+    deltas: readonly UsenetIndexerQualityDelta[],
+    atMs: number = Date.now()
+  ): Promise<void> {
+    if (deltas.length === 0) return;
+    const hourMs = hourFloor(atMs);
+    const values = join(
+      deltas.map(
+        (d) =>
+          sql`(${hourMs}, ${d.indexer}, ${d.resolution}, ${d.quality}, ${d.releases})`
+      )
+    );
+    await getDb().exec(
+      sql`INSERT INTO usenet_indexer_quality_metrics
+            (hour_ms, indexer, resolution, quality, releases)
+          VALUES ${values}
+          ON CONFLICT(hour_ms, indexer, resolution, quality) DO UPDATE SET
+            releases = usenet_indexer_quality_metrics.releases + EXCLUDED.releases`
+    );
+  }
+
+  /** Per-indexer resolution × quality totals over [sinceMs, now]. */
+  static async qualityByIndexer(
+    sinceMs: number
+  ): Promise<UsenetIndexerQualityRow[]> {
+    const rows = await getDb().query<{
+      indexer: string;
+      resolution: string;
+      quality: string;
+      releases: number | string;
+    }>(
+      sql`SELECT indexer, resolution, quality, SUM(releases) AS releases
+            FROM usenet_indexer_quality_metrics
+           WHERE hour_ms >= ${sinceMs}
+           GROUP BY indexer, resolution, quality`
+    );
+    return rows.map((r) => ({
+      indexer: r.indexer,
+      resolution: r.resolution,
+      quality: r.quality,
+      releases: Number(r.releases ?? 0),
+    }));
   }
 
   /** Overwrite the most recent grab-fetch error for an indexer. */
@@ -288,7 +348,11 @@ export class UsenetIndexerMetricsRepository {
     };
   }
 
+  /** Also clears the scope's quality rows; returns the rollup rows removed. */
   static async deleteScope(scope: UsenetIndexerScope): Promise<number> {
+    await getDb().exec(
+      sql`DELETE FROM usenet_indexer_quality_metrics WHERE ${scopeWhere(scope)}`
+    );
     const res = await getDb().exec(
       sql`DELETE FROM usenet_indexer_metrics WHERE ${scopeWhere(scope)}`
     );
@@ -305,8 +369,14 @@ export class UsenetIndexerMetricsRepository {
     return res.rowCount ?? 0;
   }
 
-  /** Delete rollups older than the cutoff. Last-error rows are kept (1 per indexer). */
+  /**
+   * Delete rollups (and quality rows) older than the cutoff; returns the
+   * rollup rows removed. Last-error rows are kept (1 per indexer).
+   */
   static async pruneOlderThan(cutoffMs: number): Promise<number> {
+    await getDb().exec(
+      sql`DELETE FROM usenet_indexer_quality_metrics WHERE hour_ms < ${cutoffMs}`
+    );
     const res = await getDb().exec(
       sql`DELETE FROM usenet_indexer_metrics WHERE hour_ms < ${cutoffMs}`
     );

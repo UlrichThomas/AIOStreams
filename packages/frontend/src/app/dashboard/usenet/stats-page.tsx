@@ -5,6 +5,7 @@ import { Card } from '@aiostreams/ui/card';
 import { IconButton } from '@aiostreams/ui/button';
 import { Popover } from '@aiostreams/ui/popover';
 import { Tooltip } from '@aiostreams/ui/tooltip';
+import { Switch } from '@aiostreams/ui/switch';
 import { cn } from '@aiostreams/ui/core/styling';
 import { AreaChart, DonutChart, Stat } from '@aiostreams/ui/charts';
 import { DashboardQueryBoundary } from '@/components/shared/dashboard-query-boundary';
@@ -19,8 +20,13 @@ import {
   type ProviderState,
   type UsenetProviderStatRow,
   type UsenetIndexerStatRow,
+  type UsenetIndexerQualityCell,
   type UsenetStatsOverview,
 } from './queries';
+import {
+  QUALITIES,
+  RESOLUTIONS,
+} from '../../../../../core/src/utils/constants';
 import {
   ResetStatsModal,
   type ResetStatsTarget,
@@ -1078,6 +1084,196 @@ function IndexerSearchTable({
   );
 }
 
+const UNKNOWN = 'Unknown';
+
+/** Short column label for a quality ("BluRay REMUX" → "Remux"). */
+function qualityLabel(quality: string): string {
+  return quality === 'BluRay REMUX' ? 'Remux' : quality;
+}
+
+/** "2160p" reads better as "4K" in a column header. */
+function resolutionLabel(resolution: string): string {
+  return resolution === '2160p' ? '4K' : resolution;
+}
+
+function comboKey(
+  c: Pick<UsenetIndexerQualityCell, 'resolution' | 'quality'>
+): string {
+  return `${c.resolution}\0${c.quality}`;
+}
+
+/** Position in the core constant list; unrecognised values sort last. */
+function rank(list: readonly string[], value: string): number {
+  const i = list.indexOf(value);
+  return i === -1 ? list.length : i;
+}
+
+function IndexerQualityTable({
+  indexers,
+  onReset,
+}: {
+  indexers: UsenetIndexerStatRow[];
+  onReset: (target: ResetStatsTarget) => void;
+}) {
+  const [showUnknown, setShowUnknown] = React.useState(false);
+  const rows = indexers
+    .filter((i) => i.qualityMix.length > 0)
+    .map((i) => ({
+      indexer: i.indexer,
+      counts: new Map(i.qualityMix.map((c) => [comboKey(c), c.releases])),
+      total: i.qualityMix.reduce((s, c) => s + c.releases, 0),
+    }))
+    .sort((a, b) => b.total - a.total);
+  if (rows.length === 0) {
+    return (
+      <p className="text-sm text-[--muted]">
+        No usenet results recorded in this window yet.
+      </p>
+    );
+  }
+
+  // Every combo any indexer returned, in resolution then quality order.
+  const combos = new Map<string, { resolution: string; quality: string }>();
+  for (const i of indexers)
+    for (const c of i.qualityMix)
+      if (
+        c.releases > 0 &&
+        (showUnknown || (c.resolution !== UNKNOWN && c.quality !== UNKNOWN))
+      )
+        combos.set(comboKey(c), {
+          resolution: c.resolution,
+          quality: c.quality,
+        });
+  const columns = [...combos.entries()]
+    .map(([key, c]) => ({ key, ...c }))
+    .sort(
+      (a, b) =>
+        rank(RESOLUTIONS, a.resolution) - rank(RESOLUTIONS, b.resolution) ||
+        rank(QUALITIES, a.quality) - rank(QUALITIES, b.quality)
+    );
+  // Header groups: consecutive columns sharing a resolution.
+  const groups: { resolution: string; span: number }[] = [];
+  for (const c of columns) {
+    const last = groups[groups.length - 1];
+    if (last?.resolution === c.resolution) last.span++;
+    else groups.push({ resolution: c.resolution, span: 1 });
+  }
+  const startsGroup = (ci: number) =>
+    ci > 0 && columns[ci - 1].resolution !== columns[ci].resolution;
+
+  return (
+    <div className="space-y-3 min-w-0">
+      <Switch
+        label="Show unknown resolution / quality"
+        value={showUnknown}
+        onValueChange={setShowUnknown}
+        size="sm"
+      />
+      <div className="overflow-x-auto -mx-4 px-4 lg:mx-0 lg:px-0">
+        <table className="w-full text-sm">
+          <thead className="text-[--muted] text-xs">
+            <tr>
+              <th />
+              {groups.map((g, gi) => (
+                <th
+                  key={g.resolution}
+                  colSpan={g.span}
+                  className={cn(
+                    'pt-1 px-2 text-center font-semibold uppercase',
+                    gi > 0 && 'border-l border-[--border]'
+                  )}
+                >
+                  {resolutionLabel(g.resolution)}
+                </th>
+              ))}
+              <th />
+              <th />
+            </tr>
+            <tr className="text-left border-b border-[--border]">
+              <th className="py-2 pr-3 uppercase">Indexer</th>
+              {columns.map((c, ci) => (
+                <th
+                  key={c.key}
+                  className={cn(
+                    'py-2 px-2 text-right font-medium whitespace-nowrap',
+                    startsGroup(ci) && 'border-l border-[--border]'
+                  )}
+                >
+                  {qualityLabel(c.quality)}
+                </th>
+              ))}
+              <th
+                className="py-2 px-3 text-right uppercase"
+                title="Distinct releases from raw results, before your filters; reposts of a release count once per request. Includes unknown resolution / quality even when hidden."
+              >
+                Total
+              </th>
+              <th className="py-2 pl-3 w-8" aria-label="Actions" />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.indexer} className="border-b border-[--border]/50">
+                <td className="py-2 pr-3 font-medium whitespace-nowrap">
+                  {r.indexer}
+                </td>
+                {columns.map((c, ci) => {
+                  const n = r.counts.get(c.key) ?? 0;
+                  const share = r.total > 0 ? n / r.total : 0;
+                  return (
+                    <td
+                      key={c.key}
+                      className={cn(
+                        'py-2 px-2 text-right tabular-nums',
+                        n === 0 && 'text-[--muted]',
+                        startsGroup(ci) && 'border-l border-[--border]'
+                      )}
+                      style={
+                        n > 0
+                          ? {
+                              backgroundColor: `rgb(var(--color-brand-500) / ${(0.08 + share * 0.6).toFixed(3)})`,
+                            }
+                          : undefined
+                      }
+                      title={`${r.indexer}: ${n.toLocaleString()} ${resolutionLabel(c.resolution)} ${c.quality} (${formatPercent(share)} of its releases)`}
+                    >
+                      {n > 0 ? formatCompact(n) : '—'}
+                    </td>
+                  );
+                })}
+                <td className="py-2 px-3 text-right tabular-nums font-medium">
+                  {formatCompact(r.total)}
+                </td>
+                <td className="py-2 pl-3 text-right">
+                  <Tooltip
+                    trigger={
+                      <IconButton
+                        size="sm"
+                        intent="alert-subtle"
+                        icon={<BiEraser />}
+                        onClick={() =>
+                          onReset({
+                            target: 'indexers',
+                            id: r.indexer,
+                            label: r.indexer,
+                          })
+                        }
+                        aria-label="Reset stats for this indexer"
+                      />
+                    }
+                  >
+                    Reset this indexer's recorded stats
+                  </Tooltip>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function ResetAllButton({
   label,
   onClick,
@@ -1122,9 +1318,9 @@ function StatsSection({
     .filter((i) => i.grabs > 0)
     .slice(0, 6)
     .map((i) => ({ name: i.indexer, value: i.grabs }));
-  const [indexerView, setIndexerView] = React.useState<'grabs' | 'searches'>(
-    'grabs'
-  );
+  const [indexerView, setIndexerView] = React.useState<
+    'grabs' | 'searches' | 'quality'
+  >('grabs');
   const grabIndexers = data.indexers.filter((i) => i.grabs > 0);
   const totalResults = data.indexers.reduce((s, i) => s + i.results, 0);
   const resultsShare = data.indexers
@@ -1132,15 +1328,39 @@ function StatsSection({
     .sort((a, b) => b.results - a.results)
     .slice(0, 6)
     .map((i) => ({ name: i.indexer, value: i.results }));
+  const qualityTotals = new Map<string, { name: string; value: number }>();
+  for (const i of data.indexers)
+    for (const c of i.qualityMix) {
+      const name = `${resolutionLabel(c.resolution)} ${qualityLabel(c.quality)}`;
+      const cur = qualityTotals.get(name);
+      if (cur) cur.value += c.releases;
+      else qualityTotals.set(name, { name, value: c.releases });
+    }
+  const totalQualityReleases = [...qualityTotals.values()].reduce(
+    (s, c) => s + c.value,
+    0
+  );
+  const qualityShare = [...qualityTotals.values()]
+    .filter((c) => c.value > 0)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 6);
   const donut =
     indexerView === 'grabs'
       ? { data: grabShare, label: 'grabs', value: totalGrabs }
-      : { data: resultsShare, label: 'results', value: totalResults };
+      : indexerView === 'searches'
+        ? { data: resultsShare, label: 'results', value: totalResults }
+        : {
+            data: qualityShare,
+            label: 'releases',
+            value: totalQualityReleases,
+          };
   const table =
     indexerView === 'grabs' ? (
       <IndexerTable indexers={grabIndexers} onReset={onReset} />
-    ) : (
+    ) : indexerView === 'searches' ? (
       <IndexerSearchTable indexers={data.indexers} onReset={onReset} />
+    ) : (
+      <IndexerQualityTable indexers={data.indexers} onReset={onReset} />
     );
 
   return (
@@ -1240,6 +1460,7 @@ function StatsSection({
                 [
                   { value: 'grabs', label: 'Grabs' },
                   { value: 'searches', label: 'Searches' },
+                  { value: 'quality', label: 'Quality' },
                 ] as const
               }
               value={indexerView}

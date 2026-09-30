@@ -83,15 +83,56 @@ export function indexersSearched(
   return Math.max(reported ?? 0, answeringIndexers(streams));
 }
 
+/** One indexer result and the release it was grouped into. */
+export interface GroupedResult {
+  indexer: string;
+  /** Opaque release id, shared by every result of the same release. */
+  release: string;
+  stream: ParsedStream;
+}
+
 /**
- * Pure: per-indexer uniqueness for one stream request's raw results.
+ * Pure: group one stream request's indexer results into releases.
  *
  * Streams are the same release when they share a `releaseKey` (size + poster +
  * day fingerprint) or a normalised release name; either link is enough, so an
  * indexer without poster data still matches one with it. Size is left out of
  * the name key because indexers disagree on it, so reposts and re-uploads under
- * the same name count as one release: "unique" means a name (or fingerprint)
- * no other indexer had, not a distinct upload.
+ * the same name count as one release.
+ */
+export function groupReleases(
+  streams: readonly ParsedStream[]
+): GroupedResult[] {
+  const dsu = new DSU<string>();
+  const nodes: { indexer: string; node: string; stream: ParsedStream }[] = [];
+
+  streams.filter(isIndexerResult).forEach((s, i) => {
+    const node = `s:${i}`;
+    dsu.makeSet(node);
+    const rawName = s.filename ?? s.folderName;
+    // A name that normalises to nothing would link every such stream.
+    const name = rawName ? normaliseReleaseName(rawName) : '';
+    const keys = [
+      s.releaseKey ? `rk:${s.releaseKey}` : undefined,
+      name ? `name:${name}` : undefined,
+      s.nzbUrl ? `nzb:${s.nzbUrl}` : undefined,
+    ];
+    for (const key of keys) if (key) dsu.union(node, key);
+    nodes.push({ indexer: indexerLabelFor(s.indexer), node, stream: s });
+  });
+
+  return nodes.map(({ indexer, node, stream }) => ({
+    indexer,
+    release: dsu.find(node),
+    stream,
+  }));
+}
+
+/**
+ * Pure: per-indexer uniqueness for one stream request's raw results.
+ *
+ * Releases are grouped by `groupReleases`: "unique" means a name (or
+ * fingerprint) no other indexer had, not a distinct upload.
  *
  * Uniqueness is relative to the sources this request actually searched
  * (addons skipped by media type or a group condition are not competitors).
@@ -107,30 +148,13 @@ export function uniquenessDeltas(
   streams: readonly ParsedStream[],
   searched: number
 ): UsenetIndexerDelta[] {
-  const dsu = new DSU<string>();
-  const keysByStream: { indexer: string; node: string }[] = [];
-
-  streams.filter(isIndexerResult).forEach((s, i) => {
-    const node = `s:${i}`;
-    dsu.makeSet(node);
-    const rawName = s.filename ?? s.folderName;
-    // A name that normalises to nothing would link every such stream.
-    const name = rawName ? normaliseReleaseName(rawName) : '';
-    const keys = [
-      s.releaseKey ? `rk:${s.releaseKey}` : undefined,
-      name ? `name:${name}` : undefined,
-      s.nzbUrl ? `nzb:${s.nzbUrl}` : undefined,
-    ];
-    for (const key of keys) if (key) dsu.union(node, key);
-    keysByStream.push({ indexer: indexerLabelFor(s.indexer), node });
-  });
-  if (keysByStream.length === 0) return [];
+  const grouped = groupReleases(streams);
+  if (grouped.length === 0) return [];
   if (Math.max(searched, answeringIndexers(streams)) < 2) return [];
 
   const releasesByIndexer = new Map<string, Set<string>>();
   const indexersByRelease = new Map<string, Set<string>>();
-  for (const { indexer, node } of keysByStream) {
-    const release = dsu.find(node);
+  for (const { indexer, release } of grouped) {
     let releases = releasesByIndexer.get(indexer);
     if (!releases) releasesByIndexer.set(indexer, (releases = new Set()));
     releases.add(release);
