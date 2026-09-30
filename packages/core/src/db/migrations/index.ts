@@ -40,9 +40,9 @@ import { watchStateDropped } from './0039_watch_state_dropped.js';
 import { watchStateRating } from './0040_watch_state_rating.js';
 import { indexTrim } from './0041_index_trim.js';
 import { watchAirTimes } from './0042_watch_air_times.js';
-import { usenetIndexerSearch } from './0040_usenet_indexer_search.js';
-import { usenetIndexerUniqueness } from './0041_usenet_indexer_uniqueness.js';
-import { usenetIndexerQuality } from './0042_usenet_indexer_quality.js';
+import { usenetIndexerSearch } from './1001_usenet_indexer_search.js';
+import { usenetIndexerUniqueness } from './1002_usenet_indexer_uniqueness.js';
+import { usenetIndexerQuality } from './1003_usenet_indexer_quality.js';
 import type { Migration } from './types.js';
 
 export const MIGRATIONS: readonly Migration[] = [
@@ -88,9 +88,28 @@ export const MIGRATIONS: readonly Migration[] = [
   watchStateRating,
   indexTrim,
   watchAirTimes,
+  // Fork-only migrations use ids from 1001 up, clear of upstream's
+  // sequential ids, so merging upstream never reuses one. Add the next
+  // fork migration as 1004, and keep these after every upstream entry.
   usenetIndexerSearch,
   usenetIndexerUniqueness,
   usenetIndexerQuality,
+];
+
+/**
+ * Fork migrations that shipped under ids upstream has since used. The runner
+ * moves a matching `_migrations` row (same old id and name) to the new id
+ * before checking for foreign migrations, so databases migrated by earlier
+ * fork builds keep working without re-running anything.
+ */
+export const RENUMBERED_MIGRATIONS: readonly {
+  from: number;
+  to: number;
+  name: string;
+}[] = [
+  { from: 40, to: 1001, name: 'usenet_indexer_search' },
+  { from: 41, to: 1002, name: 'usenet_indexer_uniqueness' },
+  { from: 42, to: 1003, name: 'usenet_indexer_quality' },
 ];
 
 export type { Migration } from './types.js';
