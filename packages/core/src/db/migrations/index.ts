@@ -39,6 +39,7 @@ import { watchSessionUser } from './0038_watch_session_user.js';
 import { watchStateDropped } from './0039_watch_state_dropped.js';
 import { usenetIndexerSearch } from './0040_usenet_indexer_search.js';
 import { usenetIndexerUniqueness } from './0041_usenet_indexer_uniqueness.js';
+import { usenetIndexerQuality } from './0042_usenet_indexer_quality.js';
 import type { Migration } from './types.js';
 
 export const MIGRATIONS: readonly Migration[] = [
@@ -83,6 +84,7 @@ export const MIGRATIONS: readonly Migration[] = [
   watchStateDropped,
   usenetIndexerSearch,
   usenetIndexerUniqueness,
+  usenetIndexerQuality,
 ];
 
 export type { Migration } from './types.js';
