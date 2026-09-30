@@ -3,6 +3,7 @@ import { createLogger } from '../../../logging/logger.js';
 import {
   UsenetMetricsRepository,
   UsenetIndexerMetricsRepository,
+  type UsenetIndexerRollup,
   type UsenetMetricDelta,
 } from '../../../db/index.js';
 import {
@@ -123,6 +124,14 @@ export interface UsenetIndexerStatRow {
   uniqueRate: number | null;
   /** uniqSole / uniqRequests; null when no requests. */
   soleRate: number | null;
+  /** Distinct releases per request by resolution × quality (raw results). */
+  qualityMix: UsenetIndexerQualityCell[];
+}
+
+export interface UsenetIndexerQualityCell {
+  resolution: string;
+  quality: string;
+  releases: number;
 }
 
 export interface UsenetThroughputPoint {
@@ -187,6 +196,37 @@ function resolveWindow(window: UsenetStatsWindow): {
     default:
       return { sinceMs: 0, bucketMs: DAY_MS };
   }
+}
+
+function emptyIndexerRollup(indexer: string): UsenetIndexerRollup {
+  return {
+    indexer,
+    grabs: 0,
+    ok: 0,
+    degraded: 0,
+    failed: 0,
+    failedMissing: 0,
+    failedFetch: 0,
+    fetchAuth: 0,
+    fetchLimited: 0,
+    sumGrabMs: 0,
+    grabSamples: 0,
+    sumImportMs: 0,
+    importSamples: 0,
+    searchRequests: 0,
+    searchFailed: 0,
+    searchEmpty: 0,
+    searchAuth: 0,
+    searchLimited: 0,
+    searchTimeout: 0,
+    sumSearchMs: 0,
+    results: 0,
+    searchHits: 0,
+    uniqRequests: 0,
+    uniqReleases: 0,
+    uniqUnique: 0,
+    uniqSole: 0,
+  };
 }
 
 function emptyLive(): LiveTiles {
@@ -447,6 +487,7 @@ export async function getUsenetStatsOverview(
     indexerSummary,
     indexerErrors,
     indexerSearchErrors,
+    indexerQuality,
   ] = await Promise.all([
     UsenetMetricsRepository.summaryByProvider(sinceMs),
     UsenetMetricsRepository.timeSeries(sinceMs, bucketMs),
@@ -454,6 +495,7 @@ export async function getUsenetStatsOverview(
     UsenetIndexerMetricsRepository.summaryByIndexer(sinceMs),
     UsenetIndexerMetricsRepository.lastErrors(),
     UsenetIndexerMetricsRepository.lastSearchErrors(),
+    UsenetIndexerMetricsRepository.qualityByIndexer(sinceMs),
   ]);
   const summaryById = new Map(summary.map((s) => [s.providerId, s]));
 
@@ -545,7 +587,22 @@ export async function getUsenetStatsOverview(
     indexerSearchErrors.map((e) => [e.indexer, e])
   );
   const totalResults = indexerSummary.reduce((s, i) => s + i.results, 0);
-  const indexers: UsenetIndexerStatRow[] = indexerSummary
+  const qualityByIndexer = new Map<string, UsenetIndexerQualityCell[]>();
+  for (const { indexer, ...cell } of indexerQuality) {
+    let cells = qualityByIndexer.get(indexer);
+    if (!cells) qualityByIndexer.set(indexer, (cells = []));
+    cells.push(cell);
+  }
+  // Quality rows record even when nothing else does (e.g. a lone indexer
+  // behind an external addon), so those indexers still need a row.
+  const summaryIndexers = new Set(indexerSummary.map((a) => a.indexer));
+  const rollups = [
+    ...indexerSummary,
+    ...[...qualityByIndexer.keys()]
+      .filter((indexer) => !summaryIndexers.has(indexer))
+      .map(emptyIndexerRollup),
+  ];
+  const indexers: UsenetIndexerStatRow[] = rollups
     .map((agg) => {
       const err = lastErrorByIndexer.get(agg.indexer);
       const searchErr = lastSearchErrorByIndexer.get(agg.indexer);
@@ -607,6 +664,7 @@ export async function getUsenetStatsOverview(
         uniqueRate:
           agg.uniqReleases > 0 ? agg.uniqUnique / agg.uniqReleases : null,
         soleRate: agg.uniqRequests > 0 ? agg.uniqSole / agg.uniqRequests : null,
+        qualityMix: qualityByIndexer.get(agg.indexer) ?? [],
       };
     })
     .sort(
