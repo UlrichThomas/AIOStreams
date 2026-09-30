@@ -176,7 +176,9 @@ export class UsenetIndexerMetricsRepository {
   /**
    * Fold one request's resolution × quality counts into the hour bucket
    * containing `atMs`. Deltas must have distinct keys: postgres rejects an
-   * upsert that touches the same row twice.
+   * upsert that touches the same row twice. Rows go in key order so
+   * concurrent requests lock shared rows in the same order and can't
+   * deadlock.
    */
   static async recordQuality(
     deltas: readonly UsenetIndexerQualityDelta[],
@@ -184,8 +186,15 @@ export class UsenetIndexerMetricsRepository {
   ): Promise<void> {
     if (deltas.length === 0) return;
     const hourMs = hourFloor(atMs);
+    const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+    const ordered = [...deltas].sort(
+      (a, b) =>
+        cmp(a.indexer, b.indexer) ||
+        cmp(a.resolution, b.resolution) ||
+        cmp(a.quality, b.quality)
+    );
     const values = join(
-      deltas.map(
+      ordered.map(
         (d) =>
           sql`(${hourMs}, ${d.indexer}, ${d.resolution}, ${d.quality}, ${d.releases})`
       )
