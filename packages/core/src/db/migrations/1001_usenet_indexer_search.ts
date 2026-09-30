@@ -13,7 +13,7 @@ const COLS = [
 ];
 
 export const usenetIndexerSearch: Migration = {
-  id: 40,
+  id: 1001,
   name: 'usenet_indexer_search',
   up: {
     sqlite: `

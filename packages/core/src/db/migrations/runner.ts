@@ -1,7 +1,7 @@
 ﻿import type { DbDriver } from '../driver/types.js';
 import { createLogger } from '../../logging/logger.js';
 import { ConfigStartupError } from '../../config/settings-store.js';
-import { MIGRATIONS, type Migration } from './index.js';
+import { MIGRATIONS, RENUMBERED_MIGRATIONS, type Migration } from './index.js';
 
 const logger = createLogger('database');
 
@@ -45,6 +45,25 @@ async function getApplied(driver: DbDriver): Promise<Map<number, string>> {
 
 async function getAppliedIds(driver: DbDriver): Promise<Set<number>> {
   return new Set((await getApplied(driver)).keys());
+}
+
+/**
+ * Move rows of fork migrations that shipped under an old id to their current
+ * id (see `RENUMBERED_MIGRATIONS`). Matches on id and name, so an upstream
+ * migration that uses the old id is left alone.
+ */
+async function renumberMigrations(driver: DbDriver): Promise<void> {
+  await driver.tx(async (tx) => {
+    for (const { from, to, name } of RENUMBERED_MIGRATIONS) {
+      const res = await tx.exec(
+        `UPDATE _migrations SET id = ? WHERE id = ? AND name = ?
+           AND NOT EXISTS (SELECT 1 FROM _migrations WHERE id = ?)`,
+        [to, from, name, to]
+      );
+      if (res.rowCount)
+        logger.info(`Renumbered migration ${from} (${name}) to ${to}`);
+    }
+  });
 }
 
 /** A name never changes once published, so a mismatch means a foreign build. */
@@ -137,6 +156,7 @@ export async function getMigrationStatus(driver: DbDriver): Promise<{
 export async function runMigrations(driver: DbDriver): Promise<void> {
   return withMigrationLock(driver, async () => {
     await ensureMigrationsTable(driver);
+    await renumberMigrations(driver);
 
     const appliedRows = await getApplied(driver);
     assertNotForeign(appliedRows);
