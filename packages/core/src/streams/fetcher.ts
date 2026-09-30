@@ -27,6 +27,7 @@ import {
   mayReturnUsenet,
   recordUniqueness,
 } from '../usenet/integration/uniqueness-metrics.js';
+import { recordQuality } from '../usenet/integration/quality-metrics.js';
 
 /**
  * Per-addon outcome tracked through {@link StreamFetcher.fetch} and surfaced
@@ -726,10 +727,12 @@ class StreamFetcher {
       // count. Addons a group condition skipped are left out of the
       // comparison rather than skipping the request: requiring every group
       // would sample only requests where the earlier groups did badly.
-      // Skip requests where a usenet source failed: the releases it would
-      // have returned are missing, which inflates the unique/sole numbers
-      // of the indexers that did answer.
+      // Uniqueness skips requests where a usenet source failed: the releases
+      // it would have returned are missing, which inflates the unique/sole
+      // numbers of the indexers that did answer. The quality mix is each
+      // indexer's own results, so it records regardless.
       void Promise.allSettled(addonFetches).then(() => {
+        recordQuality(rawUsenet);
         if (fetchDegraded) return;
         recordUniqueness(rawUsenet, searchedIndexers);
       });
