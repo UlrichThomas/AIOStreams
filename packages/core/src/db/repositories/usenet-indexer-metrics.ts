@@ -335,25 +335,36 @@ export class UsenetIndexerMetricsRepository {
   }
 
   /** Totals for a scope, for previewing what a reset would remove. */
-  static async sumScope(
-    scope: UsenetIndexerScope
-  ): Promise<{ rows: number; grabs: number; searches: number }> {
+  static async sumScope(scope: UsenetIndexerScope): Promise<{
+    rows: number;
+    grabs: number;
+    searches: number;
+    qualityRows: number;
+  }> {
     // `rows` is a reserved word in postgres; alias around it.
-    const row = await getDb().maybeOne<{
-      row_count: number | string;
-      grabs: number | string | null;
-      searches: number | string | null;
-    }>(
-      sql`SELECT COUNT(*) AS row_count,
-                 SUM(ok + degraded + failed) AS grabs,
-                 SUM(search_requests) AS searches
-            FROM usenet_indexer_metrics
-           WHERE ${scopeWhere(scope)}`
-    );
+    const [row, quality] = await Promise.all([
+      getDb().maybeOne<{
+        row_count: number | string;
+        grabs: number | string | null;
+        searches: number | string | null;
+      }>(
+        sql`SELECT COUNT(*) AS row_count,
+                   SUM(ok + degraded + failed) AS grabs,
+                   SUM(search_requests) AS searches
+              FROM usenet_indexer_metrics
+             WHERE ${scopeWhere(scope)}`
+      ),
+      getDb().maybeOne<{ row_count: number | string }>(
+        sql`SELECT COUNT(*) AS row_count
+              FROM usenet_indexer_quality_metrics
+             WHERE ${scopeWhere(scope)}`
+      ),
+    ]);
     return {
       rows: Number(row?.row_count ?? 0),
       grabs: Number(row?.grabs ?? 0),
       searches: Number(row?.searches ?? 0),
+      qualityRows: Number(quality?.row_count ?? 0),
     };
   }
 
