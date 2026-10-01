@@ -159,17 +159,28 @@ export function useItemPages(
 export function useLibraryHeads(views: BaseItemDto[], limit: number) {
   const { client, user } = useSession();
   const key = useKey();
+  const queryClient = useQueryClient();
+  const genres = useGenresOptions();
+  const genreRequired = useFeature('genreRequired');
   return useQueries({
     queries: views.map((view) => ({
       queryKey: [...key, 'head', view.Id, limit],
-      queryFn: () =>
-        client.get<BaseItemDtoQueryResult>('/Items', {
+      queryFn: async () => {
+        const required = genreRequired && needsGenre(view);
+        // A server with the feature flags every library that needs a genre.
+        const offered =
+          genreRequired && !required
+            ? undefined
+            : await queryClient.fetchQuery(genres(view.Id!));
+        return client.get<BaseItemDtoQueryResult>('/Items', {
           userId: user.Id,
           ParentId: view.Id,
           IncludeItemTypes: libraryTypes(view),
+          GenreIds: defaultGenre(offered?.Items, required)?.Id,
           Recursive: true,
           Limit: limit,
-        }),
+        });
+      },
       staleTime: 5 * 60_000,
     })),
   });
@@ -203,7 +214,7 @@ export function usePersonItems(personId: string, types: string) {
   });
 }
 
-/** Episodes of shows in progress that air in the next couple of weeks. */
+/** The next episode of each show the user is caught up on. */
 export function useUpcoming() {
   const { client, user } = useSession();
   return useQuery({
@@ -236,17 +247,42 @@ export function useCalendar(from: Date, to: Date) {
   });
 }
 
-export function useGenres(viewId: string) {
+function useGenresOptions() {
   const { client, user } = useSession();
-  return useQuery({
-    queryKey: [...useKey(), 'genres', viewId],
-    queryFn: () =>
-      client.get<BaseItemDtoQueryResult>('/Genres', {
-        userId: user.Id,
-        ParentId: viewId,
-      }),
-    staleTime: 30 * 60_000,
-  });
+  const key = useKey();
+  return (viewId: string) =>
+    queryOptions({
+      queryKey: [...key, 'genres', viewId],
+      queryFn: () =>
+        client.get<BaseItemDtoQueryResult>('/Genres', {
+          userId: user.Id,
+          ParentId: viewId,
+        }),
+      staleTime: 30 * 60_000,
+    });
+}
+
+export function useGenres(viewId: string) {
+  return useQuery(useGenresOptions()(viewId));
+}
+
+export function needsGenre(view: BaseItemDto | undefined): boolean {
+  const extension = view as { aiostreams?: { genreRequired?: boolean } };
+  return extension?.aiostreams?.genreRequired === true;
+}
+
+/**
+ * The genre a library opens with: None where offered, which a catalog that
+ * needs a genre reads as all of it, else the first when it needs one.
+ */
+export function defaultGenre(
+  genres: BaseItemDto[] | null | undefined,
+  required: boolean
+): BaseItemDto | undefined {
+  return (
+    genres?.find((g) => g.Name === 'None') ??
+    (required ? genres?.[0] : undefined)
+  );
 }
 
 export function useSearch(
@@ -690,12 +726,29 @@ export function useSetDropped() {
   const { client, user } = useSession();
   const refresh = useRefreshAll();
   return useMutation({
-    mutationFn: (v: { itemId: string; dropped: boolean }) => {
-      const path = `/UserItems/${v.itemId}/Rating`;
-      return v.dropped
-        ? client.post(path, undefined, { userId: user.Id, Likes: false })
-        : client.delete(path, { userId: user.Id });
-    },
+    // A like undrops, where clearing the rating would clear a numeric one too.
+    mutationFn: (v: { itemId: string; dropped: boolean }) =>
+      client.post(`/UserItems/${v.itemId}/Rating`, undefined, {
+        userId: user.Id,
+        Likes: !v.dropped,
+      }),
+    onSettled: refresh,
+  });
+}
+
+/** From 0 to 10; `null` clears it. */
+export function useSetRating() {
+  const { client, user } = useSession();
+  const refresh = useRefreshAll();
+  return useMutation({
+    mutationFn: (v: { itemId: string; rating: number | null }) =>
+      v.rating == null
+        ? client.delete(`/UserItems/${v.itemId}/Rating`, { userId: user.Id })
+        : client.post(
+            `/UserItems/${v.itemId}/UserData`,
+            { Rating: v.rating },
+            { userId: user.Id }
+          ),
     onSettled: refresh,
   });
 }

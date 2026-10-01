@@ -1,5 +1,90 @@
 # Changelog
 
+## [0.9.3](https://github.com/Viren070/AIOStreams/compare/desktop-v0.9.2...desktop-v0.9.3) (2026-10-01)
+
+
+### Bug Fixes
+
+* **desktop:** only look for Snap and Flatpak Discord sockets on Linux ([52a0a9f](https://github.com/Viren070/AIOStreams/commit/52a0a9f317f18243f240d858628405ab7e0966bc))
+
+## [0.9.2](https://github.com/Viren070/AIOStreams/compare/desktop-v0.9.1...desktop-v0.9.2) (2026-10-01)
+
+
+### Features
+
+* **frontend:** open the desktop app from the install card ([e7ca6b2](https://github.com/Viren070/AIOStreams/commit/e7ca6b229332158683b593bab86a1219b55db34e))
+* **jellyfin-web:** send skip actions to the Android app's player ([e7ca6b2](https://github.com/Viren070/AIOStreams/commit/e7ca6b229332158683b593bab86a1219b55db34e))
+
+## [0.9.1](https://github.com/Viren070/AIOStreams/compare/desktop-v0.9.0...desktop-v0.9.1) (2026-09-30)
+
+
+### Features
+
+* **jellyfin-web:** show a message for no libraries ([2ba1032](https://github.com/Viren070/AIOStreams/commit/2ba10321059e9517363d9e6b6a20c8201087df50))
+
+## [0.9.0](https://github.com/Viren070/AIOStreams/compare/desktop-v0.8.0...desktop-v0.9.0) (2026-09-30)
+
+
+### Features
+
+* **desktop:** drive the system's media controls from a shared now-playing state ([89f4671](https://github.com/Viren070/AIOStreams/commit/89f4671a7e376d2b688b3fa41dfbd31313b72902))
+* flag libraries that need a genre ([85c2df2](https://github.com/Viren070/AIOStreams/commit/85c2df2fc6c02fcf84460a9263ed2cc6c6a0a3f0))
+* **jellyfin-web:** add a subtitle height setting ([85c2df2](https://github.com/Viren070/AIOStreams/commit/85c2df2fc6c02fcf84460a9263ed2cc6c6a0a3f0))
+* **jellyfin-web:** link the custom CSS guide from the theme settings ([85c2df2](https://github.com/Viren070/AIOStreams/commit/85c2df2fc6c02fcf84460a9263ed2cc6c6a0a3f0))
+* **jellyfin-web:** link the source code and documentation from About ([85c2df2](https://github.com/Viren070/AIOStreams/commit/85c2df2fc6c02fcf84460a9263ed2cc6c6a0a3f0))
+* **jellyfin-web:** rate movies, shows and seasons from their page ([85c2df2](https://github.com/Viren070/AIOStreams/commit/85c2df2fc6c02fcf84460a9263ed2cc6c6a0a3f0))
+* **jellyfin-web:** replace the player's volume range with a bar that marks the boost ([85c2df2](https://github.com/Viren070/AIOStreams/commit/85c2df2fc6c02fcf84460a9263ed2cc6c6a0a3f0))
+* **jellyfin-web:** send now-playing to the desktop app and set the browser's media session ([85c2df2](https://github.com/Viren070/AIOStreams/commit/85c2df2fc6c02fcf84460a9263ed2cc6c6a0a3f0))
+* **jellyfin-web:** take the player's top volume from mpv's volume-max ([e99ce70](https://github.com/Viren070/AIOStreams/commit/e99ce707dd77d4810904ab2b687e89ddf283a036))
+
+
+### Bug Fixes
+
+* **desktop:** inhibit display sleep while a file plays on macOS and Linux ([d19594a](https://github.com/Viren070/AIOStreams/commit/d19594a6892f11110b1ea011176a469726a391f6))
+* **jellyfin-web:** send None for featured catalogs that need a genre ([85c2df2](https://github.com/Viren070/AIOStreams/commit/85c2df2fc6c02fcf84460a9263ed2cc6c6a0a3f0))
+* **jellyfin-web:** size and place browser subtitle cues ([85c2df2](https://github.com/Viren070/AIOStreams/commit/85c2df2fc6c02fcf84460a9263ed2cc6c6a0a3f0))
+
+## [0.8.0](https://github.com/Viren070/AIOStreams/compare/desktop-v0.7.0...desktop-v0.8.0) (2026-09-29)
+
+
+### Features
+
+* **desktop:** add an aiostreams:// link scheme ([8f243fc](https://github.com/Viren070/AIOStreams/commit/8f243fc6bc1a3afd71d7f0e97ff0c9ae29105751))
+* **jellyfin-web:** open aiostreams:// links ([72c70fe](https://github.com/Viren070/AIOStreams/commit/72c70fe37208b002e2de0b8d9df2efc2fedf877f))
+
+
+### Bug Fixes
+
+* **desktop:** don't scale disc subtitles, keep styled ones in the crop ([907867d](https://github.com/Viren070/AIOStreams/commit/907867d81bbd53b16b8bb9ebbf85905de2a124e7))
+* **ui:** pan carousel rows with a trackpad or mouse wheel ([#1394](https://github.com/Viren070/AIOStreams/issues/1394)) ([72c70fe](https://github.com/Viren070/AIOStreams/commit/72c70fe37208b002e2de0b8d9df2efc2fedf877f))
+
+## [0.7.0](https://github.com/Viren070/AIOStreams/compare/desktop-v0.6.0...desktop-v0.7.0) (2026-09-28)
+
+
+### Features
+
+* adjust jellyfin wording/install options, update docs, readme ([d461cd7](https://github.com/Viren070/AIOStreams/commit/d461cd76ef43c34f270d8a93a6f721f42071b528))
+* **desktop:** add Discord events for browsing and a connection status ([eb193b4](https://github.com/Viren070/AIOStreams/commit/eb193b47ff45fe30604c3ed66b0829509ccc7cf5))
+
+
+### Bug Fixes
+
+* **desktop:** send the Discord logo by address ([39d447f](https://github.com/Viren070/AIOStreams/commit/39d447f390ce2db0f1d97cf56450477862a8351a))
+
+## [0.6.0](https://github.com/Viren070/AIOStreams/compare/desktop-v0.5.0...desktop-v0.6.0) (2026-09-28)
+
+
+### Features
+
+* add a show on home modifier for catalogs that require a genre ([22fc51f](https://github.com/Viren070/AIOStreams/commit/22fc51fe02e21401a808a3e89517e21148bc32e7))
+* **jellyfin-web:** add a per-segment skip setting ([22fc51f](https://github.com/Viren070/AIOStreams/commit/22fc51fe02e21401a808a3e89517e21148bc32e7))
+
+
+### Bug Fixes
+
+* **desktop:** create the window hidden on Windows and show it after the web view ([2955154](https://github.com/Viren070/AIOStreams/commit/2955154fa97209032bf945a6d7dc73ca905c1814))
+* **ui:** declare the dark color scheme before the app loads ([22fc51f](https://github.com/Viren070/AIOStreams/commit/22fc51fe02e21401a808a3e89517e21148bc32e7))
+
 ## [0.5.0](https://github.com/Viren070/AIOStreams/compare/desktop-v0.4.0...desktop-v0.5.0) (2026-09-27)
 
 

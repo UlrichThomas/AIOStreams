@@ -3,12 +3,14 @@ import { storage } from '../storage';
 import { subtitleUrl, textSubtitles } from '../playback';
 import { sameLanguage } from '../languages';
 import type { PlaybackPrefs } from '../user-config';
+import { currentHost } from '.';
 import {
   clampDelay,
   savedSubtitleDelay,
   saveSubtitleDelay,
 } from '../subtitle-lines';
 import type { MediaStream } from '../types';
+import { subtitleLine } from '../subtitle-style';
 import {
   initialState,
   storedVolume,
@@ -47,8 +49,13 @@ function isPhone(): boolean {
   );
 }
 
+const isFullscreen = () =>
+  !!document.fullscreenElement || !!currentHost().fullscreen?.active();
+
 /** Phones also turn to landscape, which only a full screen page may lock. */
 async function enterFullscreen(): Promise<void> {
+  const app = currentHost().fullscreen;
+  if (app) return app.set(true);
   await document.documentElement.requestFullscreen?.();
   const orientation = screen.orientation as ScreenOrientation & {
     lock?(orientation: string): Promise<void>;
@@ -56,22 +63,26 @@ async function enterFullscreen(): Promise<void> {
   if (isPhone()) await orientation.lock?.('landscape');
 }
 
+async function exitFullscreen(): Promise<void> {
+  const app = currentHost().fullscreen;
+  if (app?.active()) app.set(false);
+  else await document.exitFullscreen();
+}
+
 function toggleDocumentFullscreen(): void {
-  if (document.fullscreenElement) void document.exitFullscreen();
-  else void enterFullscreen().catch(() => {});
+  void (isFullscreen() ? exitFullscreen() : enterFullscreen()).catch(() => {});
 }
 
 /** Phones play full screen in landscape, as their own players do. */
 export function usePhoneFullscreen(enabled: boolean): void {
   React.useEffect(() => {
     if (!enabled || !isPhone()) return;
-    if (!document.fullscreenElement) void enterFullscreen().catch(() => {});
+    if (!isFullscreen()) void enterFullscreen().catch(() => {});
     return () => {
       // The next episode's player keeps it, as it could not enter again without a tap.
       setTimeout(() => {
         const playing = document.documentElement.classList.contains('playing');
-        if (!playing && document.fullscreenElement)
-          void document.exitFullscreen().catch(() => {});
+        if (!playing && isFullscreen()) void exitFullscreen().catch(() => {});
       });
     };
   }, [enabled]);
@@ -110,6 +121,23 @@ export function useBrowserPlayer(
       shifted.current.set(track, delayMs.current);
     }
   }, [video]);
+  // Browsers disagree on where a cue the file leaves unplaced goes.
+  const placed = React.useRef(new WeakSet<VTTCue>());
+  const line = subtitleLine(opts.subtitleStyle);
+  const placeCues = React.useCallback(() => {
+    for (const track of Array.from(video.current?.textTracks ?? [])) {
+      for (const cue of Array.from(track.cues ?? [])) {
+        const vtt = cue as VTTCue;
+        if (vtt.line !== 'auto' && !placed.current.has(vtt)) continue;
+        placed.current.add(vtt);
+        vtt.snapToLines = false;
+        vtt.line = line;
+        vtt.lineAlign = 'end';
+      }
+    }
+  }, [video, line]);
+  React.useEffect(placeCues, [placeCues]);
+  const latestPlaceCues = useLatest(placeCues);
   const showSubtitle = (id: string | null) => {
     const tracks = video.current?.textTracks;
     if (!tracks) return;
@@ -165,17 +193,31 @@ export function useBrowserPlayer(
     for (const [event, handler] of Object.entries(handlers))
       el.addEventListener(event, handler);
     const trackElements = Array.from(el.querySelectorAll('track'));
-    for (const t of trackElements) t.addEventListener('load', shiftCues);
-    const onFullscreen = () =>
-      patch({ fullscreen: !!document.fullscreenElement });
+    const onTrackLoad = () => {
+      latestPlaceCues.current();
+      shiftCues();
+    };
+    for (const t of trackElements) t.addEventListener('load', onTrackLoad);
+    const onFullscreen = () => patch({ fullscreen: isFullscreen() });
     document.addEventListener('fullscreenchange', onFullscreen);
     return () => {
       for (const [event, handler] of Object.entries(handlers))
         el.removeEventListener(event, handler);
       document.removeEventListener('fullscreenchange', onFullscreen);
-      for (const t of trackElements) t.removeEventListener('load', shiftCues);
+      for (const t of trackElements) t.removeEventListener('load', onTrackLoad);
     };
   }, [video, startMs, onEnded]);
+
+  // Browsers keep a closed player in their media controls until its video drops the stream.
+  React.useEffect(() => {
+    const el = video.current;
+    return () => {
+      if (!el) return;
+      el.pause();
+      el.removeAttribute('src');
+      el.load();
+    };
+  }, [video]);
 
   const el = () => video.current;
   return {

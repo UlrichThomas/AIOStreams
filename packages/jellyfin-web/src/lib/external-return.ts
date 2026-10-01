@@ -1,7 +1,7 @@
 import React from 'react';
 import { useRouterState } from '@tanstack/react-router';
 import { toast } from 'sonner';
-import { playbackHost } from './hosts';
+import { currentHost } from './hosts';
 import { itemPath } from './paths';
 import { PlaybackReporter } from './playback';
 import { useRefreshAll } from './queries';
@@ -11,17 +11,20 @@ import type { BaseItemDto, SourceInfo } from './types';
 
 /**
  * The item's page, marked with what played, for a player that reports where it
- * stopped. Only a browser tab is what such a link reopens.
+ * stopped: a browser tab reopens it by its address, the desktop app by its link.
  */
 export function externalReturnUrl(
   item: BaseItemDto,
   source: SourceInfo
 ): string | undefined {
-  if (playbackHost() !== 'browser') return undefined;
+  const host = currentHost().name;
+  if (host !== 'desktop' && host !== 'browser') return undefined;
   const path = itemPath(item);
   const marks = new URLSearchParams({ played: item.Id!, source: source.Id! });
+  const marked = `${path}${path.includes('?') ? '&' : '?'}${marks}`;
+  if (host === 'desktop') return `aiostreams://return${marked}`;
   const { origin, pathname } = window.location;
-  return `${origin}${pathname}#${path}${path.includes('?') ? '&' : '?'}${marks}`;
+  return `${origin}${pathname}#${marked}`;
 }
 
 const MARKS = ['played', 'source', 'position', 'lastPlayedUrl'];

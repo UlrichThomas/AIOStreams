@@ -37,6 +37,7 @@ import { watchSessionDevice } from './0036_watch_session_device.js';
 import { watchSinkRetired } from './0037_watch_sink_retired.js';
 import { watchSessionUser } from './0038_watch_session_user.js';
 import { watchStateDropped } from './0039_watch_state_dropped.js';
+import { watchStateRating } from './0040_watch_state_rating.js';
 import { usenetIndexerSearch } from './1001_usenet_indexer_search.js';
 import { usenetIndexerUniqueness } from './1002_usenet_indexer_uniqueness.js';
 import { usenetIndexerQuality } from './1003_usenet_indexer_quality.js';
@@ -82,6 +83,7 @@ export const MIGRATIONS: readonly Migration[] = [
   watchSinkRetired,
   watchSessionUser,
   watchStateDropped,
+  watchStateRating,
   // Fork-only migrations use ids from 1001 up, clear of upstream's
   // sequential ids, so merging upstream never reuses one. Add the next
   // fork migration as 1004, and keep these after every upstream entry.

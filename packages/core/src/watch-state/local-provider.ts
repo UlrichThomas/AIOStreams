@@ -8,20 +8,17 @@ import {
   type WatchStatePatch,
   type WatchStateRow,
 } from '../db/repositories/watch-state.js';
-import type {
-  WatchChangeListener,
-  WatchEvent,
-  WatchProgressEvent,
-  WatchScope,
-  WatchStateProvider,
+import {
+  seriesKeyOfMatch,
+  type WatchChangeListener,
+  type WatchEvent,
+  type WatchProgressEvent,
+  type WatchScope,
+  type WatchStateProvider,
 } from './types.js';
 
 const logger = createLogger('watch-state');
 
-/** Progress at or past this fraction marks the item played. */
-const PLAYED_FRACTION = 0.9;
-/** Progress below this fraction on stop resets the position. */
-const RESUME_MIN_FRACTION = 0.05;
 /** Items shorter than this never create a resume entry. */
 const RESUME_MIN_DURATION_MS = 90_000;
 interface PendingProgress {
@@ -148,12 +145,24 @@ export class LocalWatchStateProvider implements WatchStateProvider {
           dropped: event.type === 'dropped',
           snapshot: event.snapshot,
         });
+      case 'rating':
+        return this.write(scope, event.identity, {
+          rating: event.rating,
+          likes: event.likes,
+          snapshot: event.snapshot,
+        });
     }
   }
 
   private async undropOnPlay(scope: WatchScope, identity: WatchIdentity) {
-    if (identity.kind === 'episode' && identity.seriesKey)
-      await WatchStateRepository.undropSeries(scope, identity.seriesKey);
+    if (identity.kind !== 'episode' || !identity.seriesKey) return;
+    const show = identity.matchKey
+      ? seriesKeyOfMatch(identity.matchKey, identity.mediaType)
+      : null;
+    await WatchStateRepository.undropSeries(
+      scope,
+      show ? [identity.seriesKey, show] : [identity.seriesKey]
+    );
   }
 
   async clear(scope: WatchScope, itemKeys?: string[]): Promise<number> {
@@ -214,7 +223,10 @@ export class LocalWatchStateProvider implements WatchStateProvider {
 
   private progressPatch(p: PendingProgress): WatchStatePatch {
     const dur = p.durationMs ?? 0;
-    if (dur > 0 && p.positionMs >= dur * PLAYED_FRACTION) {
+    if (
+      dur > 0 &&
+      p.positionMs >= (dur * appConfig.watchState.playedPercent) / 100
+    ) {
       return {
         positionMs: 0,
         durationMs: dur,
@@ -247,7 +259,7 @@ export class LocalWatchStateProvider implements WatchStateProvider {
     const dur = event.durationMs || existing?.durationMs || 0;
     const pos = event.positionMs ?? existing?.positionMs ?? 0;
     const now = Date.now();
-    if (dur > 0 && pos >= dur * PLAYED_FRACTION) {
+    if (dur > 0 && pos >= (dur * appConfig.watchState.playedPercent) / 100) {
       return {
         positionMs: 0,
         durationMs: dur,
@@ -258,7 +270,8 @@ export class LocalWatchStateProvider implements WatchStateProvider {
       };
     }
     const tooShort = dur > 0 && dur < RESUME_MIN_DURATION_MS;
-    const tooEarly = dur > 0 && pos < dur * RESUME_MIN_FRACTION;
+    const tooEarly =
+      dur > 0 && pos < (dur * appConfig.watchState.minResumePercent) / 100;
     return {
       positionMs: tooShort || tooEarly ? 0 : pos,
       durationMs: dur || undefined,

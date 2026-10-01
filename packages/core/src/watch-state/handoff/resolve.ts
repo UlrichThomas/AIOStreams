@@ -1,6 +1,4 @@
 import { config as appConfig } from '../../config/index.js';
-import { createLogger } from '../../logging/logger.js';
-import { isUnsafeRemoteUrl } from '../../utils/url-safety.js';
 import type {
   Addon,
   Manifest,
@@ -10,8 +8,6 @@ import {
   readWatchStateCapability,
   type PlaybackEventKind,
 } from './capability.js';
-
-const logger = createLogger('playback-handoff');
 
 export interface ResolvedPlaybackSink {
   instanceId: string;
@@ -24,6 +20,7 @@ export interface ResolvedPlaybackSink {
   query: string;
   events: readonly PlaybackEventKind[];
   bulk?: boolean;
+  viewers?: boolean;
   /** Whether this addon answers the pull half. */
   pullable: boolean;
   ttlSeconds?: number;
@@ -96,17 +93,6 @@ export function resolvePlaybackSinks(
     } catch {
       continue;
     }
-    if (
-      !appConfig.watchState.allowPrivateUrls &&
-      isUnsafeRemoteUrl(manifestUrl.toString())
-    ) {
-      logger.debug(
-        { addon: addon.name },
-        'skipping watch-state exchange with a private address'
-      );
-      continue;
-    }
-
     const baseUrl = manifestUrl
       .toString()
       .split('?')[0]
@@ -124,6 +110,7 @@ export function resolvePlaybackSinks(
       query: manifestUrl.search,
       events: capability.events,
       bulk: capability.bulk,
+      viewers: capability.viewers,
       pullable: capability.pullable,
       ttlSeconds: capability.ttlSeconds,
       types: capability.types,

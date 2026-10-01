@@ -172,6 +172,8 @@ const JellyfinSettingsFields = z.object({
   segments: z.boolean().optional(),
   /** Which markers to offer. Absent means all of them. */
   segmentTypes: z.array(z.enum(['Intro', 'Recap', 'Outro'])).optional(),
+  /** Send unaired episodes as missing, which clients won't offer to play. Default on. */
+  markUnaired: z.boolean().optional(),
   /** The configuration's own user: the history its trackers sync with. */
   primary: z
     .object({
@@ -250,33 +252,13 @@ const JellyfinSettingsFields = z.object({
 
 /** Per-configuration settings for the Jellyfin-compatible API. */
 const JellyfinSettings = JellyfinSettingsFields.superRefine((settings, ctx) => {
-  // A tracker account belongs to one history, or two histories would mix.
-  const owners = new Map<string, string>();
-  const claim = (who: string, trackers: string[] | undefined) => {
-    for (const id of new Set(trackers ?? [])) {
-      const owner = owners.get(id);
-      if (owner) {
-        ctx.addIssue({
-          code: 'custom',
-          message: `Tracker "${id}" is selected for both ${owner} and ${who}.`,
-        });
-      } else {
-        owners.set(id, who);
-      }
-    }
-  };
-  claim('the primary user', settings.primary?.trackers);
   for (const persona of settings.personas ?? []) {
-    if (persona.history === 'shared') {
-      if (persona.trackers) {
-        ctx.addIssue({
-          code: 'custom',
-          message: `${persona.name} shares the primary user's history, so it uses the primary user's trackers.`,
-        });
-      }
-      continue;
+    if (persona.history === 'shared' && persona.trackers) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `${persona.name} shares the primary user's history, so it uses the primary user's trackers.`,
+      });
     }
-    claim(persona.name, persona.trackers);
   }
 });
 
@@ -571,12 +553,14 @@ const CatalogModification = z.object({
   reverse: z.boolean().optional(), // reverse the catalog
   persistShuffleFor: z.number().min(0).max(24).optional(), // persist the shuffle for a given amount of time (in hours)
   onlyOnDiscover: z.boolean().optional(), // only show the catalog on the discover page
+  showOnHome: z.boolean().optional(), // show a genre-requiring catalog on the home page too
   disableSearch: z.boolean().optional(), // disable the search for the catalog
   onlyOnSearch: z.boolean().optional(), // only show the catalog on search results - mutually exclusive with onlyOnDiscover, only available when the catalog has a non-required search extra
   enabled: z.boolean().optional(), // enable or disable the catalog
   usePosterService: z.boolean().optional(), // use rpdb or top poster for posters if supported
   overrideType: z.string().min(1).optional(), // override the type of the catalog
   hideable: z.boolean().optional(), // hide the catalog from the home page
+  genreRequired: z.boolean().optional(), // property of whether only a genre is required (showOnHome applies)
   searchable: z.boolean().optional(), // property of whether the catalog is searchable (not a search only catalog)
   addonName: z.string().optional(), // the name of the addon that provides the catalog
 });
@@ -1141,6 +1125,8 @@ export const UserDataSchema = z.object({
   presets: PresetList,
   addonCategoryColors: z.record(z.string(), z.string()).optional(), // maps custom category name → colour key
   catalogModifications: z.array(CatalogModification).optional(),
+  newCatalogsDisabled: z.array(z.string()).optional(), // addon instance ids whose catalogs start disabled until saved otherwise
+  upstreamCatalogOrder: z.array(z.string()).optional(), // addon instance ids whose catalogs keep the addon's order within their positions
   mergedCatalogs: z.array(MergedCatalog).optional(),
   externalDownloads: z.boolean().optional(),
   cacheAndPlay: CacheAndPlaySchema.optional(),
@@ -1249,6 +1235,7 @@ const AddonCatalogDefinitionSchema = z.object({
  */
 export const WatchStateCapabilitySchema = z.looseObject({
   version: z.coerce.number().optional(),
+  viewers: z.boolean().optional(),
   push: z
     .looseObject({
       events: z.array(z.string()).optional(),
@@ -1261,6 +1248,7 @@ export const WatchStateCapabilitySchema = z.looseObject({
       items: z.boolean().optional(),
       watched: z.boolean().optional(),
       watchlist: z.boolean().optional(),
+      ratings: z.boolean().optional(),
       ttlSeconds: z.coerce.number().min(0).optional(),
     })
     .optional(),
@@ -1697,7 +1685,8 @@ const MetaVideoSchema = z
     cast: z.array(z.string()).nullish(),
     directors: z.array(z.string()).nullish(),
     links: z.array(MetaLinkSchema).nullish(),
-    ratings: z.array(ContentRatingSchema).nullish(),
+    // Some addons send a display string here.
+    ratings: z.array(ContentRatingSchema).nullish().catch(undefined),
   })
   .passthrough();
 
@@ -1983,7 +1972,6 @@ const StatusResponseSchema = z.object({
       minTtl: z.number(),
       maxTimeout: z.number(),
       maxBytes: z.number(),
-      allowPrivateUrls: z.boolean(),
     }),
     loggingSensitiveInfo: z.boolean(),
     searchApiDisabled: z.boolean(),

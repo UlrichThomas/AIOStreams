@@ -45,9 +45,10 @@ import { cn } from '@aiostreams/ui/core/styling';
 import { useSession } from '../lib/session';
 import { usePickableUsers } from '../lib/queries';
 import { configureUrl, navigate, to } from '../lib/paths';
-import { playbackHost } from '../lib/hosts';
+import { currentHost } from '../lib/hosts';
 import { serverAddress } from '../lib/servers';
 import { useServerInfo } from '../lib/server-info';
+import { useDiscordBrowsing } from '../lib/discord';
 import { UserAvatar } from './user-avatar';
 import { BrandLogo } from './brand-logo';
 import { VersionPickerProvider } from './version-picker';
@@ -222,7 +223,7 @@ function HistoryButton({
 function HistoryButtons() {
   useRouterState({ select: (s) => s.location.href });
   if (
-    playbackHost() === 'browser' &&
+    currentHost().name === 'browser' &&
     !matchMedia('(display-mode: standalone)').matches
   )
     return null;
@@ -277,6 +278,7 @@ export function WebLayout() {
   const users = usePickableUsers();
   const several = (users.data?.length ?? 0) > 1;
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  useDiscordBrowsing(pathname);
   const activity: SidebarItem = {
     id: 'activity',
     name: 'Activity',
@@ -498,6 +500,24 @@ export function PageBody({ children }: { children: React.ReactNode }) {
     <div
       data-ui="page-body"
       className="relative z-[1] space-y-8 px-4 pb-16 pt-[calc(1.5rem+env(safe-area-inset-top))] lg:pl-0 lg:pr-10 lg:pt-[calc(2.5rem+env(safe-area-inset-top))]"
+    >
+      {children}
+    </div>
+  );
+}
+
+/** The window's height less the phone nav bar, which pages are padded for. */
+export const FILL_WINDOW =
+  'min-h-[calc(100dvh-5rem-env(safe-area-inset-bottom))] lg:min-h-dvh';
+
+export function PageMessage({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      data-ui="page-message"
+      className={cn(
+        'relative z-[1] flex flex-col justify-center px-4 py-10 lg:pl-0 lg:pr-10',
+        FILL_WINDOW
+      )}
     >
       {children}
     </div>

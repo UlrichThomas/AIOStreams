@@ -1,4 +1,5 @@
 import { storage } from './storage';
+import { currentHost } from './hosts';
 
 // The desktop app is its own client, on the computer it runs on.
 const shell = window.aiostreamsDesktop;
@@ -17,6 +18,8 @@ export function apiBase(): string {
 }
 
 function deviceId(): string {
+  const app = currentHost().device?.()?.id;
+  if (app) return app;
   const stored = storage.get<string>(DEVICE_KEY);
   if (stored) return stored;
   // randomUUID needs a secure context, which a LAN http address is not.
@@ -28,7 +31,8 @@ function deviceId(): string {
 }
 
 function deviceName(): string {
-  if (shell?.device) return shell.device;
+  const app = currentHost().device?.()?.name;
+  if (app) return app;
   const ua = navigator.userAgent;
   const browser = /Edg\//.test(ua)
     ? 'Edge'

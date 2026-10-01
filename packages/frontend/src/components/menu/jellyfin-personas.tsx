@@ -30,17 +30,23 @@ const UUID_SHAPE =
 const DEFAULT_MAX_PERSONAS = 20;
 const NO_TRACKER_OPTIONS: WatchStateTrackerOption[] = [];
 
+/** Tracker addons repeat this rule to match a name to its id, so it must not change. */
+function slugOf(name: string): string {
+  return (
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 28) || 'user'
+  );
+}
+
 /**
  * The id keys the user's history, so it is minted once from the name and never
  * edited: the same name gets the same history back.
  */
 function idFor(name: string, existing: Persona[]): string {
-  const base =
-    name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 28) || 'user';
+  const base = slugOf(name);
   let id = base;
   for (let i = 2; existing.some((p) => p.id === id); i++) id = `${base}-${i}`;
   return id;
@@ -184,6 +190,13 @@ function TrackersField({
           >
             Automatic
           </button>
+          <button
+            type="button"
+            onClick={() => onChange([])}
+            className={pill(!!value && !value.length)}
+          >
+            None
+          </button>
           {choices.map((choice) => {
             const selected = !!value?.includes(choice.presetId);
             return (
@@ -219,8 +232,9 @@ function TrackersField({
         </p>
       )}
       <p className="text-xs text-[--muted]">
-        A tracker syncs with one history at a time, and moving it to another
-        user brings along what it already recorded.{' '}
+        A tracker syncs with one history at a time, unless it keeps each user
+        apart, and moving it to another user brings along what it already
+        recorded.{' '}
         {!loading && !choices.length
           ? 'No tracker addons in your saved configuration yet; add one and save.'
           : 'Added a tracker addon? Save, and it shows here.'}
@@ -352,6 +366,10 @@ export function JellyfinPersonas() {
   const [primaryDraft, setPrimaryDraft] = useState<Primary | null>(null);
   const [pendingRemoval, setPendingRemoval] = useState<number | null>(null);
 
+  const shared = new Set(
+    trackerOptions.filter((o) => o.viewers).map((o) => o.presetId)
+  );
+
   /** Other users' trackers; `automatic` adds an automatic primary user's. */
   const takenFor = (index: number | null, automatic: boolean) => {
     const taken = new Map<string, string>();
@@ -361,12 +379,12 @@ export function JellyfinPersonas() {
         : automatic
           ? trackerOptions.filter((o) => o.user === '').map((o) => o.presetId)
           : [];
-      for (const id of held) taken.set(id, primaryName);
+      for (const id of held) if (!shared.has(id)) taken.set(id, primaryName);
     }
     personas.forEach((persona, i) => {
       if (i === index || persona.history === 'shared') return;
       for (const id of persona.trackers ?? [])
-        if (!taken.has(id)) taken.set(id, persona.name);
+        if (!shared.has(id) && !taken.has(id)) taken.set(id, persona.name);
     });
     return taken;
   };
@@ -491,7 +509,10 @@ export function JellyfinPersonas() {
     }
     if (
       !primaryDraft.trackers &&
-      personas.some((p) => p.history !== 'shared' && p.trackers?.length)
+      personas.some(
+        (p) =>
+          p.history !== 'shared' && p.trackers?.some((id) => !shared.has(id))
+      )
     ) {
       toast.warning(
         'Trackers picked for other users stay unused while the primary user syncs with every tracker.'
@@ -579,6 +600,10 @@ export function JellyfinPersonas() {
               persona.history !== 'shared' && persona.trackers
                 ? trackersLabel(persona.trackers)
                 : null,
+              persona.history !== 'shared' &&
+              persona.id !== slugOf(persona.name)
+                ? `tracker id ${persona.id}`
+                : null,
               persona.hidden ? 'hidden from the picker' : null,
               persona.lock ? 'PIN' : null,
             ]
@@ -629,7 +654,7 @@ export function JellyfinPersonas() {
           <div className="space-y-4">
             <TextInput
               label="Name"
-              help="Shown by clients. Defaults to your addon name."
+              help="Shown in apps. Defaults to your addon name."
               placeholder={userData.addonName || 'Primary user'}
               value={primaryDraft.name ?? ''}
               onValueChange={(value) =>
@@ -689,11 +714,11 @@ export function JellyfinPersonas() {
       )}
 
       {draft && (
-        <Modal open onOpenChange={close} title="Jellyfin user">
+        <Modal open onOpenChange={close} title="User">
           <div className="space-y-4">
             <TextInput
               label="Name"
-              help="Shown by clients, and typed to sign in."
+              help="Shown in apps, and typed to sign in."
               value={draft.name}
               onValueChange={(value) => setDraft({ ...draft, name: value })}
             />
@@ -732,7 +757,7 @@ export function JellyfinPersonas() {
                 choices={choicesFor(draft.id, takenFor(editing, true))}
                 value={draft.trackers}
                 onChange={(trackers) => setDraft({ ...draft, trackers })}
-                automatic="Syncs only with a tracker addon its variants add."
+                automatic="Syncs with a tracker addon its variants add, and with any that keeps each user apart."
                 note={
                   primary?.trackers
                     ? undefined

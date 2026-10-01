@@ -29,16 +29,6 @@ export const watchStateSchema = {
     requiresRestart: false,
     secret: false,
   },
-  allowPrivateUrls: {
-    schema: z.boolean(),
-    default: false,
-    label: 'Allow exchanging with private addresses',
-    description:
-      'Allow playback events to be sent to, and watch state read from, an addon on a private or loopback address, such as `http://tracker:7000` on a Docker network. This lets anyone who can create a configuration make this server send requests to your internal network, so only enable it on a trusted, non-public instance.',
-    env: 'WATCH_STATE_ALLOW_PRIVATE_URLS',
-    requiresRestart: false,
-    secret: false,
-  },
   maxSinks: {
     schema: z.number().int().min(0),
     default: 3,
@@ -121,11 +111,33 @@ export const watchStateSchema = {
     default: 365,
     label: 'Watch state retention (days)',
     description:
-      'Watch progress, played flags and favourites untouched for longer than this are deleted by the daily prune task. State read from an addon is refreshed on every successful read, so it only ages out once that addon stops reporting it.',
+      'Watch history, favourites and dropped shows are kept for as long as the configuration is in use, and deleted by the daily prune task once it has gone unused for this many days. Unfinished progress not updated in that time is deleted on its own.',
     env: 'WATCH_STATE_RETENTION_DAYS',
     requiresRestart: false,
     secret: false,
     ui: { min: 1 },
+  },
+  minResumePercent: {
+    schema: z.number().int().min(0).max(49),
+    default: 5,
+    label: 'Minimum resume percentage',
+    description:
+      'Playback stopped before this much of a title has played keeps no resume point, so it stays out of Continue Watching and has no resume button. Set 0 to keep every position.',
+    env: 'WATCH_STATE_MIN_RESUME_PERCENT',
+    requiresRestart: false,
+    secret: false,
+    ui: { min: 0, max: 49 },
+  },
+  playedPercent: {
+    schema: z.number().int().min(50).max(100),
+    default: 90,
+    label: 'Played percentage',
+    description:
+      'Playback that reaches this much of a title marks it played and clears its resume point. Tracker addons are told it was watched, and a title imported from one this far along counts as played.',
+    env: 'WATCH_STATE_PLAYED_PERCENT',
+    requiresRestart: false,
+    secret: false,
+    ui: { min: 50, max: 100 },
   },
   sessionIdleTimeout: {
     schema: seconds.pipe(z.number().min(60)),

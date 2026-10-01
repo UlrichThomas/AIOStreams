@@ -244,6 +244,7 @@ function Content() {
 
         <WhatsNew
           version={version}
+          baseVersion={status?.version}
           channel={channel}
           releases={releases}
           docsEntries={docsEntries}
@@ -321,7 +322,8 @@ function Content() {
       />
 
       <InstanceUpdatedModal
-        version={version}
+        tag={version}
+        baseVersion={status?.version}
         channel={channel}
         docsEntries={docsEntries}
       />

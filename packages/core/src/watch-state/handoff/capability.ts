@@ -17,14 +17,16 @@ export const PLAYBACK_EVENTS = [
   'unplayed',
 ] as const;
 
-/* These two pairs are sent only to an addon that lists them. */
+/* These pairs are sent only to an addon that lists them. */
 export const WATCHLIST_EVENTS = ['watchlisted', 'unwatchlisted'] as const;
 export const DROP_EVENTS = ['dropped', 'undropped'] as const;
+export const RATING_EVENTS = ['rated', 'unrated'] as const;
 
 export const SENDABLE_EVENTS = [
   ...PLAYBACK_EVENTS,
   ...WATCHLIST_EVENTS,
   ...DROP_EVENTS,
+  ...RATING_EVENTS,
 ] as const;
 
 export type PlaybackEventKind = (typeof SENDABLE_EVENTS)[number];
@@ -38,6 +40,8 @@ export interface WatchStateCapabilityInfo {
   events: readonly PlaybackEventKind[];
   /** Takes a mark on a whole show or season as one request. */
   bulk: boolean;
+  /** Tells users apart by the `viewer` it is sent. */
+  viewers: boolean;
   /** Whether the addon answers the `pull` half. */
   pullable: boolean;
   /** How long its answer may be reused before asking again. */
@@ -75,7 +79,10 @@ export function readWatchStateCapability(
   const pull = block?.pull;
   const pullable =
     !!pull &&
-    (pull.items !== false || pull.watched !== false || pull.watchlist === true);
+    (pull.items !== false ||
+      pull.watched !== false ||
+      pull.watchlist === true ||
+      pull.ratings === true);
 
   if (!events.length && !pullable) return null;
 
@@ -83,6 +90,7 @@ export function readWatchStateCapability(
     version: block?.version ?? 1,
     events,
     bulk: block?.push?.bulk === true,
+    viewers: block?.viewers === true,
     pullable,
     ttlSeconds: pull?.ttlSeconds,
     types: entry.types ?? [],

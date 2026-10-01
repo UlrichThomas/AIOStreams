@@ -25,21 +25,18 @@ import {
   subtitleUrl,
   textSubtitles,
 } from '../lib/playback';
-import { playbackHost } from '../lib/hosts';
+import { currentHost } from '../lib/hosts';
 import { useFeature } from '../lib/server-info';
 import { useBrowserPlayer, usePhoneFullscreen } from '../lib/hosts/browser';
-import { useDesktopPlayer } from '../lib/hosts/jellyfin-desktop';
-import { useShellPlayer } from '../lib/hosts/shell';
-import { useDiscordPresence } from '../lib/discord';
-import type { PlayerController } from '../lib/player';
+import { useNowPlaying } from '../lib/now-playing';
+import type { NativePlayerOptions, PlayerController } from '../lib/player';
 import {
-  useChapterSkips,
-  useSubtitleStyle,
-  useVideoFit,
+  settings,
+  useSetting,
   type SubtitleStyle,
   type VideoFit,
 } from '../lib/settings';
-import { subtitleCss } from '../lib/subtitle-style';
+import { subtitleCss, subtitleScale } from '../lib/subtitle-style';
 import { usePlaybackPrefs, type PlaybackPrefs } from '../lib/user-config';
 import { backdropUrl } from '../lib/images';
 import { goBack, navigate, to, versionsPath } from '../lib/paths';
@@ -97,7 +94,7 @@ export function PlayerPage({
   const info = usePlaybackInfo(itemId, { sourceId: sourceId || undefined });
   const playback = usePlaybackPrefs();
   usePlayerPage();
-  usePhoneFullscreen(playbackHost() === 'browser');
+  usePhoneFullscreen(!currentHost().usePlayer);
 
   // Pinned once found: a refreshed version list must not restart playback.
   const [playing, setPlaying] = React.useState<Omit<
@@ -133,11 +130,11 @@ export function PlayerPage({
       <Failure itemId={itemId} message="This version is no longer available." />
     );
   }
-  const host = playbackHost();
+  const { usePlayer } = currentHost();
   return (
     <VersionPickerProvider>
-      {host === 'shell' || host === 'desktop' ? (
-        <NativePlayer {...playing} startMs={startMs} />
+      {usePlayer ? (
+        <NativePlayer {...playing} startMs={startMs} usePlayer={usePlayer} />
       ) : (
         <BrowserPlayer {...playing} startMs={startMs} />
       )}
@@ -333,10 +330,11 @@ function Failure({
   );
 }
 
+/** Sized from the video's height, as a cue is by default; Firefox reads a percentage against the page font. */
 function cueCss(style: SubtitleStyle): string {
   const css = subtitleCss(style);
   return `video::cue {
-    font-size: ${css.fontSize};
+    font-size: calc(${subtitleScale(style)} * 5vh);
     font-weight: ${css.fontWeight};
     color: ${css.color};
     background-color: ${css.backgroundColor};
@@ -354,13 +352,14 @@ function BrowserPlayer({
   const { client } = useSession();
   const video = React.useRef<HTMLVideoElement>(null);
   const { back, onEnded, connect } = useEnded(item);
-  const subtitleStyle = useSubtitleStyle();
-  const [fit] = useVideoFit();
+  const [subtitleStyle] = useSetting(settings.subtitleStyle);
+  const [fit] = useSetting(settings.videoFit);
   const player = useBrowserPlayer(video, {
     source,
     startMs,
     onEnded,
     prefs,
+    subtitleStyle,
   });
   const segments = useSegments(item.Id!);
   const next = useNextEpisodePrompt({
@@ -372,6 +371,11 @@ function BrowserPlayer({
   connect(next);
   const switchVersion = useSwitchVersion(item, source, player);
   useReporting(player, { item, source, playSessionId });
+  useNowPlaying(item, player, {
+    onStop: back,
+    onNext: next.next ? next.playNext : undefined,
+    onPrevious: next.previous ? next.playPrevious : undefined,
+  });
 
   return (
     <div data-page="player" className="fixed inset-0 bg-black">
@@ -432,7 +436,7 @@ function useShownSegments(
 ) {
   const { chapters } = player;
   const { durationMs } = player.state;
-  const [preferChapters] = useChapterSkips();
+  const [preferChapters] = useSetting(settings.desktop.chapterSkips);
   return React.useMemo(() => {
     const named = chapterSegments(chapters ?? [], durationMs);
     const [first, second] = preferChapters
@@ -453,13 +457,14 @@ function NativePlayer({
   playSessionId,
   startMs,
   prefs,
-}: PlayerProps) {
+  usePlayer,
+}: PlayerProps & {
+  usePlayer: (opts: NativePlayerOptions) => PlayerController;
+}) {
   const { client } = useSession();
   const { back, onEnded, connect } = useEnded(item);
-  const subtitleStyle = useSubtitleStyle();
-  const useNativePlayer =
-    playbackHost() === 'shell' ? useShellPlayer : useDesktopPlayer;
-  const player = useNativePlayer({
+  const [subtitleStyle] = useSetting(settings.subtitleStyle);
+  const player = usePlayer({
     client,
     item,
     url: streamUrl(client, item.Id!, source, playSessionId),
@@ -479,7 +484,11 @@ function NativePlayer({
   connect(next);
   const switchVersion = useSwitchVersion(item, source, player);
   useReporting(player, { item, source, playSessionId });
-  useDiscordPresence(item, player.state);
+  useNowPlaying(item, player, {
+    onStop: back,
+    onNext: next.next ? next.playNext : undefined,
+    onPrevious: next.previous ? next.playPrevious : undefined,
+  });
 
   return (
     <div data-page="player" className="fixed inset-0">

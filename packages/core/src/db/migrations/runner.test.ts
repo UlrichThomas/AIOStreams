@@ -35,34 +35,44 @@ describe('runMigrations', () => {
     const applied = await appliedRows();
     for (const m of MIGRATIONS) assert.equal(applied.get(m.id), m.name);
     for (const r of RENUMBERED_MIGRATIONS)
-      assert.equal(applied.has(r.from), false);
+      assert.notEqual(applied.get(r.from), r.name);
   });
 
   it('moves rows from an earlier fork build to their new ids without re-running them', async () => {
     await runMigrations(driver);
-    // Rewind to how an earlier fork build recorded them.
-    for (const r of RENUMBERED_MIGRATIONS)
+    // Rewind to how an earlier fork build recorded them. Those builds predate
+    // the upstream migrations that now use the old ids, so drop those rows
+    // (they get applied again below).
+    for (const r of RENUMBERED_MIGRATIONS) {
+      await driver.exec(`DELETE FROM _migrations WHERE id = ?`, [r.from]);
       await driver.exec(`UPDATE _migrations SET id = ? WHERE id = ?`, [
         r.from,
         r.to,
       ]);
+    }
+    await driver.exec(`DROP INDEX IF EXISTS idx_watch_state_rating_sink`);
+    for (const col of [
+      'rating',
+      'rating_sink_id',
+      'rating_at',
+      'rating_seen_at',
+      'likes',
+    ])
+      await driver.exec(`ALTER TABLE watch_state DROP COLUMN ${col}`);
 
     // Re-running the ADD COLUMN migrations would throw on sqlite.
     await runMigrations(driver);
     const applied = await appliedRows();
     for (const r of RENUMBERED_MIGRATIONS) {
       assert.equal(applied.get(r.to), r.name);
-      assert.equal(applied.has(r.from), false);
+      assert.notEqual(applied.get(r.from), r.name);
     }
+    assert.equal(applied.get(40), 'watch_state_rating');
     assert.equal(applied.size, MIGRATIONS.length);
   });
 
   it("leaves an upstream migration that uses a fork's old id alone", async () => {
     await runMigrations(driver);
-    await driver.exec(`INSERT INTO _migrations (id, name) VALUES (?, ?)`, [
-      40,
-      'watch_state_rating',
-    ]);
     await runMigrations(driver);
     assert.equal((await appliedRows()).get(40), 'watch_state_rating');
   });

@@ -32,10 +32,8 @@ const logger = createLogger('playback-pull');
 
 const REQUEST_TIMEOUT_MS = 20_000;
 
-/** Nothing below this fraction is worth restoring as a resume point. */
-const RESUME_MIN_FRACTION = 0.02;
-/** At or past this fraction the addon is describing a finished item. */
-const PLAYED_FRACTION = 0.9;
+/** A tracker's resume point already passed its own minimum, so imports allow a lower one. */
+const RESUME_MIN_PERCENT = 2;
 
 const StateItemSchema = z.looseObject({
   type: z.string().optional(),
@@ -73,11 +71,22 @@ const StateWatchlistEntrySchema = z.looseObject({
   at: z.number().optional(),
 });
 
+const StateRatingSchema = z.looseObject({
+  type: z.string().min(1),
+  metaId: z.string().min(1),
+  videoId: z.string().min(1).optional(),
+  season: z.number().nullable().optional(),
+  episode: z.number().nullable().optional(),
+  rating: z.number(),
+  at: z.number().optional(),
+});
+
 const PlaybackStateSchema = z.looseObject({
   version: z.string().optional(),
   items: z.array(StateItemSchema).optional(),
   watched: StateWatchedSchema.optional(),
   watchlist: z.array(StateWatchlistEntrySchema).optional(),
+  ratings: z.array(StateRatingSchema).optional(),
 });
 
 export type PlaybackStatePayload = z.infer<typeof PlaybackStateSchema>;
@@ -89,6 +98,7 @@ export interface PullOutcome {
   watched: number;
   watchlist: number;
   dropped: number;
+  ratings: number;
   removed: number;
   skipped: number;
 }
@@ -99,6 +109,7 @@ const EMPTY: PullOutcome = {
   watched: 0,
   watchlist: 0,
   dropped: 0,
+  ratings: 0,
   removed: 0,
   skipped: 0,
 };
@@ -218,9 +229,13 @@ async function matchKeysFrom(
       videoId: item.videoId,
     });
   }
+  // Already imported ones have their match key stored.
   for (const entry of payload.watchlist ?? []) {
     const ref = watchlistRef(entry);
-    // Already imported, with its match key stored.
+    if (!listed.has(itemKeyFor(ref))) refs.push(ref);
+  }
+  for (const entry of payload.ratings ?? []) {
+    const ref = ratingRef(entry);
     if (!listed.has(itemKeyFor(ref))) refs.push(ref);
   }
   for (const id of payload.watched?.movies ?? []) {
@@ -353,7 +368,8 @@ async function importItems(
       item.played === true ||
       (!!position &&
         position.durationMs > 0 &&
-        position.positionMs >= position.durationMs * PLAYED_FRACTION);
+        position.positionMs >=
+          (position.durationMs * appConfig.watchState.playedPercent) / 100);
 
     if (!played && !position) {
       skipped++;
@@ -364,7 +380,10 @@ async function importItems(
     const tooEarly =
       !!position &&
       position.durationMs > 0 &&
-      position.positionMs < position.durationMs * RESUME_MIN_FRACTION;
+      position.positionMs <
+        (position.durationMs *
+          Math.min(RESUME_MIN_PERCENT, appConfig.watchState.minResumePercent)) /
+          100;
 
     rows.push({
       identity,
@@ -568,6 +587,76 @@ async function importWatchlist(
   return { written: rows.length, touched };
 }
 
+/** A `videoId` other than the meta rates that episode, a `season` that season. */
+function ratingRef(entry: z.infer<typeof StateRatingSchema>): ContentRef {
+  if (entry.videoId && entry.videoId !== entry.metaId) {
+    const split = splitVideoId(entry.videoId);
+    return {
+      kind: 'episode',
+      type: entry.type,
+      baseId: entry.metaId,
+      season: entry.season !== undefined ? entry.season : split.season,
+      episode: entry.episode !== undefined ? entry.episode : split.episode,
+      videoId: entry.videoId,
+    };
+  }
+  if (entry.type !== 'movie' && entry.season != null)
+    return {
+      kind: 'season',
+      type: entry.type,
+      baseId: entry.metaId,
+      season: entry.season,
+    };
+  return watchlistRef(entry);
+}
+
+type RatingImport = { identity: WatchIdentity; rating: number; at: number };
+
+/** The same rules as {@link importWatchlist}; a changed rating is written again. */
+async function importRatings(
+  scope: WatchScope,
+  sink: SinkRow,
+  entries: z.infer<typeof StateRatingSchema>[],
+  now: number,
+  db: DbDriver,
+  matches: MatchKeys
+): Promise<{ written: number; touched: string[] }> {
+  const byKey = new Map<string, RatingImport>();
+  for (const entry of entries) {
+    if (!(entry.rating >= 0 && entry.rating <= 10)) continue;
+    const identity = identityFor(ratingRef(entry));
+    byKey.set(identity.itemKey, {
+      identity: {
+        ...identity,
+        matchKey: matches.get(identity.itemKey) ?? null,
+      },
+      rating: entry.rating,
+      at: atMs(entry.at, now),
+    });
+  }
+  const existing = await WatchStateRepository.getMany(
+    scope,
+    [...byKey.keys()],
+    db
+  );
+  const echoWindowMs = appConfig.watchState.echoWindowSeconds * 1000;
+  const rows: RatingImport[] = [];
+  const touched: string[] = [];
+  for (const row of byKey.values()) {
+    const held = existing.get(row.identity.itemKey);
+    if (held?.ratingSinkId === sink.id && held.rating === row.rating) {
+      touched.push(row.identity.itemKey);
+      continue;
+    }
+    if (held?.ratingSinkId && held.ratingSinkId !== sink.id) continue;
+    const setHere = held && !held.ratingSinkId && held.ratingAt != null;
+    if (setHere && now - held.ratingAt! < echoWindowMs) continue;
+    rows.push(row);
+  }
+  await WatchStateRepository.upsertRatings(scope, sink.id, rows, now, db);
+  return { written: rows.length, touched };
+}
+
 /** The same rules as {@link importWatchlist}. */
 async function importDropped(
   scope: WatchScope,
@@ -637,6 +726,7 @@ async function fetchState(sink: SinkRow): Promise<PlaybackStatePayload | null> {
     ['episodes', watched?.episodes?.length ?? 0, cfg.pullMaxWatched],
     ['watchlist', parsed.data.watchlist?.length ?? 0, cfg.pullMaxWatched],
     ['dropped', watched?.dropped?.length ?? 0, cfg.pullMaxWatched],
+    ['ratings', parsed.data.ratings?.length ?? 0, cfg.pullMaxWatched],
   ];
   for (const [what, got, max] of counts) {
     if (got > max) throw new Error(`${what} list of ${got} exceeds ${max}`);
@@ -702,6 +792,7 @@ export async function pullSink(
   let watchedSkipped = 0;
   let watchlistWritten = 0;
   let droppedWritten = 0;
+  let ratingsWritten = 0;
   let removed = 0;
   const unchanged = !payload.watched;
 
@@ -710,15 +801,22 @@ export async function pullSink(
    * written but not yet marked seen. The fetch stays outside it: on SQLite a
    * transaction holds the single connection.
    */
-  const watchlistKeys = (payload.watchlist ?? []).map((entry) =>
-    itemKeyFor(watchlistRef(entry))
-  );
-  const held = watchlistKeys.length
-    ? await WatchStateRepository.getMany(scope, watchlistKeys)
+  const listKeys = [
+    ...(payload.watchlist ?? []).map((entry) =>
+      itemKeyFor(watchlistRef(entry))
+    ),
+    ...(payload.ratings ?? []).map((entry) => itemKeyFor(ratingRef(entry))),
+  ];
+  const held = listKeys.length
+    ? await WatchStateRepository.getMany(scope, listKeys)
     : new Map<string, WatchStateRow>();
   const listed = new Set(
     [...held.values()]
-      .filter((row) => row.favorite && row.favoriteSinkId === sink.id)
+      .filter(
+        (row) =>
+          (row.favorite && row.favoriteSinkId === sink.id) ||
+          (row.rating != null && row.ratingSinkId === sink.id)
+      )
       .map((row) => row.itemKey)
   );
   const matches = await matchKeysFrom(payload, listed);
@@ -828,6 +926,31 @@ export async function pullSink(
         tx
       );
     }
+
+    if (payload.ratings) {
+      const res = await importRatings(
+        scope,
+        sink,
+        payload.ratings,
+        now,
+        tx,
+        matches
+      );
+      ratingsWritten = res.written;
+      await WatchStateRepository.touchRatings(
+        scope,
+        sink.id,
+        res.touched,
+        now,
+        tx
+      );
+      removed += await WatchStateRepository.clearStaleRatings(
+        scope,
+        sink.id,
+        now,
+        tx
+      );
+    }
   });
 
   await PlaybackHandoffRepository.finishPull(sink.id, token, {
@@ -844,6 +967,7 @@ export async function pullSink(
     watched: watchedWritten,
     watchlist: watchlistWritten,
     dropped: droppedWritten,
+    ratings: ratingsWritten,
     removed,
     skipped: items.skipped + watchedSkipped,
   };
@@ -852,6 +976,7 @@ export async function pullSink(
     outcome.watched ||
     outcome.watchlist ||
     outcome.dropped ||
+    outcome.ratings ||
     outcome.removed
   ) {
     logger.debug({ addon: sink.addonName, ...outcome }, 'imported watch state');

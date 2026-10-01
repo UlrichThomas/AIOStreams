@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod links;
 mod logging;
+mod media;
 mod placement;
 mod platform;
 mod shell;
@@ -9,11 +11,11 @@ mod updates;
 use std::cell::RefCell;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use aiostreams_desktop_core::bridge::{Inbound, Outbound, PROTOCOL_VERSION, origin};
-use aiostreams_desktop_core::discord;
 use aiostreams_desktop_core::player::Player;
+use aiostreams_desktop_core::{discord, now_playing};
 use updates::{Command, Updater};
 
 #[derive(Debug)]
@@ -28,6 +30,8 @@ pub enum UserEvent {
     ToggleMaximize,
     WindowState,
     WindowButtons(bool),
+    Link(String),
+    LinksReady,
 }
 
 /// The window edges the page resizes from; the system handles the others.
@@ -43,6 +47,7 @@ pub struct Args {
     web_dir: Option<PathBuf>,
     devtools: bool,
     debug_port: Option<u16>,
+    link: Option<String>,
 }
 
 fn args() -> Args {
@@ -51,6 +56,7 @@ fn args() -> Args {
         web_dir: None,
         devtools: cfg!(debug_assertions),
         debug_port: None,
+        link: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -59,7 +65,10 @@ fn args() -> Args {
             "--web-dir" => args.web_dir = it.next().map(PathBuf::from),
             "--devtools" => args.devtools = true,
             "--remote-debugging-port" => args.debug_port = it.next().and_then(|p| p.parse().ok()),
-            _ => log::warn!("unknown argument {arg}"),
+            _ => match links::accept(&arg) {
+                Some(link) => args.link = Some(link),
+                None => log::warn!("unknown argument {arg}"),
+            },
         }
     }
     args
@@ -215,7 +224,18 @@ fn bridge_script() -> String {
 
 fn main() {
     // Runs Velopack's install and update hooks, which exit when they are the reason for this launch.
-    velopack::VelopackApp::build().run();
+    let mut velopack = velopack::VelopackApp::build();
+    // Only an installed copy claims the scheme, so a portable one never takes it over.
+    #[cfg(windows)]
+    {
+        velopack = velopack
+            .on_after_install_fast_callback(|_| platform::register_links())
+            .on_after_update_fast_callback(|_| platform::register_links())
+            .on_before_uninstall_fast_callback(|_| platform::unregister_links());
+    }
+    velopack.run();
+    #[cfg(windows)]
+    platform::claim_app_id();
     let (config_dir, data_dir) = match portable_root() {
         Some(root) => (root.join("data"), root.join("data")),
         None => (app_dir(dirs::config_dir()), app_dir(dirs::data_local_dir())),
@@ -223,11 +243,11 @@ fn main() {
     let logs = data_dir.join("logs");
     let log_file = logging::init(&logs);
     log::info!("starting {}", about());
-    let Some(_instance) = platform::claim_instance(&data_dir) else {
+    let args = args();
+    let Some(_instance) = platform::claim_instance(&data_dir, args.link.as_deref()) else {
         log::info!("already running; brought its window forward");
         return;
     };
-    let args = args();
     #[cfg(target_os = "linux")]
     if let Some(port) = args.debug_port {
         // SAFETY: set before the web view starts, which is what reads it.
@@ -320,8 +340,50 @@ pub fn start_player(
         library.display(),
         mpv_dir.display()
     );
+    let awake = Mutex::new(Awake::default());
+    let emit = move |message: Outbound| {
+        if let Outbound::MpvProp { name, data } = &message
+            && let Ok(mut awake) = awake.lock()
+        {
+            awake.update(name, data);
+        }
+        now_playing::observe(&message);
+        emit(message)
+    };
     Player::start(library, &defaults, &required, Arc::new(emit))
         .unwrap_or_else(|e| platform::fatal(&format!("mpv failed to start: {e}")))
+}
+
+/// Keeps the display on while a file plays.
+struct Awake {
+    paused: bool,
+    idle: bool,
+    on: bool,
+}
+
+impl Default for Awake {
+    fn default() -> Self {
+        Self {
+            paused: false,
+            idle: true,
+            on: false,
+        }
+    }
+}
+
+impl Awake {
+    fn update(&mut self, name: &str, data: &serde_json::Value) {
+        match name {
+            "pause" => self.paused = data == true,
+            "idle-active" => self.idle = data == true,
+            _ => return,
+        }
+        let on = !self.paused && !self.idle;
+        if on != self.on {
+            self.on = on;
+            platform::keep_awake(on);
+        }
+    }
 }
 
 pub fn handle(
@@ -405,7 +467,10 @@ pub fn handle(
                 updater.send(Command::Apply);
             }
         }
-        Inbound::Presence { presence } => discord::set(presence),
+        Inbound::Presence { presence } => now_playing::browsing(presence),
+        Inbound::NowPlaying { item } => now_playing::set_item(item),
+        Inbound::DiscordCheck => discord::check(),
+        Inbound::LinksReady => send(UserEvent::LinksReady),
         Inbound::WebError { message } => {
             let message: String = message.chars().take(4000).collect();
             log::error!(target: "web", "{message}");

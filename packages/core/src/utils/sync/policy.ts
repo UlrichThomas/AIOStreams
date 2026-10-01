@@ -1,5 +1,5 @@
 import { config as appConfig } from '../../config/index.js';
-import { isUnsafeRemoteUrl, isUnsafeRemoteUrlResolved } from '../url-safety.js';
+import { isUnsafeRemoteUrl } from '../url-safety.js';
 import type { UrlAllowlist } from './allowlist.js';
 import { isHttpUrl, type SyncKind, type UrlPartition } from './types.js';
 
@@ -15,10 +15,7 @@ export function isUnrestricted(
   return access === 'all' || (access === 'trusted' && !!userData?.trusted);
 }
 
-/**
- * Synchronous because config validation calls it on the request path, so only
- * the literal address check happens here; {@link assertFetchable} resolves DNS.
- */
+/** Checks the literal address only; the connection guard checks resolved names. */
 export function partitionUrls(
   kind: SyncKind,
   urls: string[],
@@ -50,7 +47,9 @@ export function partitionUrls(
       });
       continue;
     }
-    if (allowPrivate() ? !isHttpUrl(url) : isUnsafeRemoteUrl(url)) {
+    if (
+      appConfig.http.allowPrivateUrls ? !isHttpUrl(url) : isUnsafeRemoteUrl(url)
+    ) {
       partition.denied.push({ url, reason: 'unsafe-address' });
       continue;
     }
@@ -59,18 +58,4 @@ export function partitionUrls(
   }
 
   return partition;
-}
-
-/** Only for URLs the instance has not vouched for; every host is user-supplied. */
-export async function assertFetchable(url: string): Promise<void> {
-  if (allowPrivate()) return;
-  if (await isUnsafeRemoteUrlResolved(url)) {
-    throw new Error(
-      'That URL points somewhere this server will not connect to. It must be a public http(s) address.'
-    );
-  }
-}
-
-function allowPrivate(): boolean {
-  return appConfig.userLimits.sync.allowPrivateUrls === true;
 }

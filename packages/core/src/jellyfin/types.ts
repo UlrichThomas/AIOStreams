@@ -100,6 +100,8 @@ export interface MemoPointer {
   encryptedPassword: string;
   itemId: string;
   persona?: string;
+  /** Only on a play session's pointer. */
+  scope?: string;
 }
 
 export type ImageKind = 'Primary' | 'Backdrop' | 'Logo' | 'Thumb';
@@ -109,8 +111,9 @@ export interface UserItemDataDto {
   PlaybackPositionTicks: number;
   PlayCount: number;
   IsFavorite: boolean;
-  /** False for a dropped show; a like is not kept. */
   Likes?: boolean;
+  /** 0 to 10. */
+  Rating?: number;
   Played: boolean;
   LastPlayedDate?: string;
   PlayedPercentage?: number;

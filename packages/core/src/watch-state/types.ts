@@ -56,6 +56,7 @@ export interface ContentRef {
  */
 export function itemKeyFor(ref: ContentRef): string {
   if (ref.kind === 'episode') return `e|${episodeAddress(ref)}`;
+  if (ref.kind === 'season') return `se|${ref.baseId}:${ref.season ?? 0}`;
   return ref.kind === 'movie' ? `m|${ref.baseId}` : seriesKeyOf(ref.baseId);
 }
 
@@ -92,6 +93,34 @@ export function seriesIdOf(
   return containsToken(baseId, series) ? series : baseId;
 }
 
+export function matchedEpisodeOf(
+  matchKey: string,
+  type: string
+): Pick<WatchIdentity, 'baseId' | 'season' | 'episode' | 'videoId'> | null {
+  if (!matchKey.startsWith('e|')) return null;
+  const videoId = matchKey.slice(2);
+  const parsed = IdParser.parse(videoId, type);
+  if (!parsed?.episode) return null;
+  const suffix = parsed.season
+    ? `:${parsed.season}:${parsed.episode}`
+    : `:${parsed.episode}`;
+  if (!videoId.endsWith(suffix)) return null;
+  return {
+    baseId: videoId.slice(0, -suffix.length),
+    season: parsed.season ? Number(parsed.season) : null,
+    episode: Number(parsed.episode),
+    videoId,
+  };
+}
+
+export function seriesKeyOfMatch(
+  matchKey: string,
+  type: string
+): string | null {
+  const matched = matchedEpisodeOf(matchKey, type);
+  return matched ? seriesKeyOf(matched.baseId) : null;
+}
+
 function containsToken(haystack: string, token: string): boolean {
   const word = /[A-Za-z0-9]/;
   for (
@@ -123,7 +152,10 @@ export function identityFor(input: ContentRef): WatchIdentity {
     mediaType: ref.type,
     baseId: ref.baseId,
     // Absolute numbering keeps a null season; 1 would be a different item.
-    season: ref.kind === 'episode' ? (ref.season ?? null) : null,
+    season:
+      ref.kind === 'episode' || ref.kind === 'season'
+        ? (ref.season ?? null)
+        : null,
     episode: ref.kind === 'episode' ? (ref.episode ?? null) : null,
     videoId: ref.videoId ?? (ref.kind === 'movie' ? ref.baseId : null),
     seriesKey: seriesKeyFor(ref),
@@ -150,7 +182,15 @@ export interface WatchFlagEvent {
   snapshot?: WatchSnapshot;
 }
 
-export type WatchEvent = WatchProgressEvent | WatchFlagEvent;
+export interface WatchRatingEvent {
+  type: 'rating';
+  identity: WatchIdentity;
+  rating?: number | null;
+  likes?: boolean | null;
+  snapshot?: WatchSnapshot;
+}
+
+export type WatchEvent = WatchProgressEvent | WatchFlagEvent | WatchRatingEvent;
 
 export type WatchChangeListener = (
   scope: WatchScope,

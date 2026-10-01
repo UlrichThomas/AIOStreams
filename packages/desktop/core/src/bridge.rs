@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::discord::Presence;
 use crate::mpv::Kind;
+use crate::now_playing::{self, MediaKey};
 
 /// Bumped when a message changes shape, so pages can tell shells apart.
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -65,10 +66,18 @@ pub enum Inbound {
     WebError {
         message: String,
     },
-    /// What Discord shows the user watching; `None` clears it.
+    /// What Discord shows the user doing; `None` clears it.
     Presence {
         presence: Option<Presence>,
     },
+    /// Connects to Discord if need be and answers with a `discord-status`.
+    DiscordCheck,
+    /// The title the player shows; `None` once it closes.
+    NowPlaying {
+        item: Option<now_playing::Item>,
+    },
+    /// The page can take `link` messages, and any that arrived before it loaded.
+    LinksReady,
 }
 
 #[derive(Debug, Serialize)]
@@ -108,6 +117,18 @@ pub enum Outbound {
         version: Option<String>,
         error: Option<String>,
     },
+    /// `connected`, `not-found`, `failed` or `refused`, with the reason for the last two.
+    DiscordStatus {
+        state: &'static str,
+        message: Option<String>,
+    },
+    /// An `aiostreams://` link the app was opened with.
+    Link {
+        url: String,
+    },
+    MediaKey {
+        key: MediaKey,
+    },
     Error {
         message: String,
     },
@@ -128,6 +149,7 @@ pub const OBSERVED: &[(&str, Kind)] = &[
     ("seeking", Kind::Flag),
     ("idle-active", Kind::Flag),
     ("volume", Kind::Double),
+    ("volume-max", Kind::Double),
     ("mute", Kind::Flag),
     ("speed", Kind::Double),
     ("aid", Kind::String),
@@ -163,6 +185,7 @@ const SETTABLE: &[&str] = &[
     "sub-back-color",
     "sub-border-style",
     "sub-ass-override",
+    "sub-ass-force-margins",
     "hwdec",
     "audio-channels",
     "audio-spdif",

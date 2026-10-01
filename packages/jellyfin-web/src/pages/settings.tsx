@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import type { IconType } from 'react-icons';
 import {
+  LuAppWindow,
   LuCaptions,
   LuCirclePlay,
   LuHeart,
@@ -40,7 +41,7 @@ import { useSession } from '../lib/session';
 import { usePickableUsers, useViews } from '../lib/queries';
 import { libraryLabel } from '../lib/format';
 import { configureUrl } from '../lib/paths';
-import { playbackHost } from '../lib/hosts';
+import { currentHost } from '../lib/hosts';
 import {
   openLogs,
   openMpvConfig,
@@ -49,12 +50,15 @@ import {
   applyUpdate,
   checkForUpdates,
   useUpdateState,
+  checkDiscord,
+  useDiscordStatus,
+  type DiscordStatus,
   type ShellInfo,
   type UpdateState,
 } from '../lib/hosts/shell';
 import { LANGUAGES } from '../lib/languages';
 import { serverAddress } from '../lib/servers';
-import { subtitleCss } from '../lib/subtitle-style';
+import { subtitleCss, subtitleLine } from '../lib/subtitle-style';
 import { usePlaybackPrefs, type SubtitleMode } from '../lib/user-config';
 import {
   externalAlways,
@@ -63,50 +67,28 @@ import {
   setExternalPlayerTemplate,
 } from '../lib/playback';
 import {
+  settings,
+  useSetting,
   AUDIO_CHANNELS,
   CUSTOM_CSS_OFF,
   MAX_CUSTOM_CSS,
   MAX_FEATURED,
-  useCustomCss,
-  useThemeColors,
   NEXT_COUNTDOWNS,
   NEXT_LEADS,
   SEEK_STEPS,
-  useAudioChannels,
-  useEpisodeLayout,
-  useEscExitsFullscreen,
-  useChapterSkips,
-  useCombineSearch,
-  useUpdateChannel,
-  useFeatured,
-  useHardwareDecoding,
-  useHeroMode,
-  useMergeNextUp,
-  useNextCountdown,
-  useNextFallbackFirst,
-  useNextLead,
-  useNextPrompt,
-  usePassthrough,
-  usePosterLines,
-  usePosterSize,
-  useSeekStep,
-  useShareOnDiscord,
-  useSkipVersionList,
-  useSubtitleBackgroundColor,
-  useSubtitleBold,
-  useSubtitleBackgroundOpacity,
-  useSubtitleOutline,
-  useSubtitleOutlineColor,
-  useSubtitleOverrideStyled,
-  useSubtitleSize,
-  useSubtitleStyle,
-  useSubtitleTextColor,
+  SEGMENT_ACTIONS,
+  SEGMENT_TYPES,
+  DISCORD_EVENTS,
+  type DiscordEvent,
+  SUBTITLE_POSITION_MAX,
   type AudioChannels,
   type EpisodeLayout,
   type HeroMode,
   type NextPrompt,
   type PosterLine,
   type PosterSize,
+  type SegmentAction,
+  type SegmentType,
   type SubtitleOutline,
   type SubtitleSize,
 } from '../lib/settings';
@@ -171,19 +153,61 @@ const NEXT_PROMPT_HELP: Record<NextPrompt, string> = {
   off: 'Episodes end without offering the next one.',
 };
 
+const SEGMENT_LABELS: Record<SegmentType, string> = {
+  Intro: 'Intros',
+  Recap: 'Recaps',
+  Outro: 'Credits',
+  Preview: 'Previews',
+  Commercial: 'Ads',
+};
+
+const SEGMENT_ACTION_LABELS: Record<SegmentAction, string> = {
+  ask: 'Show a skip button',
+  skip: 'Skip automatically',
+  none: 'Do nothing',
+};
+
+function SegmentActionSelect({ type }: { type: SegmentType }) {
+  const [action, setAction] = useSetting(settings.segment[type]);
+  return (
+    <Select
+      label={SEGMENT_LABELS[type]}
+      help={
+        type === 'Outro' && action === 'skip'
+          ? 'Credits that end an episode are left to the next episode prompt when it shows.'
+          : undefined
+      }
+      options={SEGMENT_ACTIONS.map((a) => ({
+        value: a,
+        label: SEGMENT_ACTION_LABELS[a],
+      }))}
+      value={action}
+      onValueChange={(v) => setAction(v as SegmentAction)}
+    />
+  );
+}
+
 function PlaybackSection() {
   const { prefs, update } = usePlaybackPrefs();
-  const [seekStep, setSeekStep] = useSeekStep();
-  const [skipList, setSkipList] = useSkipVersionList();
-  const [nextPrompt, setNextPrompt] = useNextPrompt();
-  const [nextLead, setNextLead] = useNextLead();
-  const [nextCountdown, setNextCountdown] = useNextCountdown();
-  const [nextFallbackFirst, setNextFallbackFirst] = useNextFallbackFirst();
-  const [hardwareDecoding, setHardwareDecoding] = useHardwareDecoding();
-  const [escExits, setEscExits] = useEscExitsFullscreen();
-  const [chapterSkips, setChapterSkips] = useChapterSkips();
+  const [seekStep, setSeekStep] = useSetting(settings.seekStep);
+  const [skipList, setSkipList] = useSetting(settings.skipVersionList);
+  const [nextPrompt, setNextPrompt] = useSetting(settings.next.prompt);
+  const [nextLead, setNextLead] = useSetting(settings.next.lead);
+  const [nextCountdown, setNextCountdown] = useSetting(settings.next.countdown);
+  const [nextFallbackFirst, setNextFallbackFirst] = useSetting(
+    settings.next.fallbackFirst
+  );
+  const [hardwareDecoding, setHardwareDecoding] = useSetting(
+    settings.desktop.hardwareDecoding
+  );
+  const [escExits, setEscExits] = useSetting(
+    settings.desktop.escExitsFullscreen
+  );
+  const [chapterSkips, setChapterSkips] = useSetting(
+    settings.desktop.chapterSkips
+  );
   const bingeGroups = useFeature('versions');
-  const shell = playbackHost() === 'shell';
+  const shell = currentHost().name === 'desktop';
   const [template, setTemplate] = React.useState(externalPlayerTemplate);
   const [always, setAlways] = React.useState(externalAlways);
   const changeTemplate = (value: string) => {
@@ -282,6 +306,20 @@ function PlaybackSection() {
           />
         )}
       </SettingsCard>
+      <SettingsCard title="Skipping" description={ON_DEVICE}>
+        {SEGMENT_TYPES.map((type) => (
+          <SegmentActionSelect key={type} type={type} />
+        ))}
+        {shell && (
+          <Switch
+            side="right"
+            label="Skip by the file's chapters"
+            help="Where a file names its intro, credits, recap or preview chapters, skipping uses them instead of the server's times, since they fit that exact file. The rest still come from the server."
+            value={chapterSkips}
+            onValueChange={setChapterSkips}
+          />
+        )}
+      </SettingsCard>
       <SettingsCard title="Controls" description={ON_DEVICE}>
         <Select
           label="Skip length"
@@ -293,15 +331,6 @@ function PlaybackSection() {
           value={String(seekStep)}
           onValueChange={(v) => setSeekStep(Number(v))}
         />
-        {shell && (
-          <Switch
-            side="right"
-            label="Skip by the file's chapters"
-            help="Where a file names its intro, credits, recap or preview chapters, the skip buttons use them instead of the server's times, since they fit that exact file. The rest still come from the server."
-            value={chapterSkips}
-            onValueChange={setChapterSkips}
-          />
-        )}
         {shell && (
           <Switch
             side="right"
@@ -369,8 +398,12 @@ function PlaybackSection() {
 
 function AudioSection() {
   const { prefs, update } = usePlaybackPrefs();
-  const [audioChannels, setAudioChannels] = useAudioChannels();
-  const [passthrough, setPassthrough] = usePassthrough();
+  const [audioChannels, setAudioChannels] = useSetting(
+    settings.desktop.audioChannels
+  );
+  const [passthrough, setPassthrough] = useSetting(
+    settings.desktop.passthrough
+  );
   return (
     <>
       <SettingsCard title="Language" description={ON_ACCOUNT}>
@@ -384,7 +417,7 @@ function AudioSection() {
           }
         />
       </SettingsCard>
-      {playbackHost() === 'shell' && (
+      {currentHost().name === 'desktop' && (
         <SettingsCard title="Output" description={ON_DEVICE}>
           <Select
             label="Channels"
@@ -412,16 +445,25 @@ function AudioSection() {
 function SubtitlesSection() {
   const { prefs, update } = usePlaybackPrefs();
   const mode = prefs.SubtitleMode ?? 'Default';
-  const [size, setSize] = useSubtitleSize();
-  const [bold, setBold] = useSubtitleBold();
-  const [textColor, setTextColor] = useSubtitleTextColor();
-  const [outline, setOutline] = useSubtitleOutline();
-  const [outlineColor, setOutlineColor] = useSubtitleOutlineColor();
-  const [backgroundColor, setBackgroundColor] = useSubtitleBackgroundColor();
-  const [backgroundOpacity, setBackgroundOpacity] =
-    useSubtitleBackgroundOpacity();
-  const [overrideStyled, setOverrideStyled] = useSubtitleOverrideStyled();
-  const css = subtitleCss(useSubtitleStyle());
+  const [size, setSize] = useSetting(settings.subtitle.size);
+  const [bold, setBold] = useSetting(settings.subtitle.bold);
+  const [textColor, setTextColor] = useSetting(settings.subtitle.textColor);
+  const [outline, setOutline] = useSetting(settings.subtitle.outline);
+  const [outlineColor, setOutlineColor] = useSetting(
+    settings.subtitle.outlineColor
+  );
+  const [backgroundColor, setBackgroundColor] = useSetting(
+    settings.subtitle.backgroundColor
+  );
+  const [backgroundOpacity, setBackgroundOpacity] = useSetting(
+    settings.subtitle.backgroundOpacity
+  );
+  const [overrideStyled, setOverrideStyled] = useSetting(
+    settings.subtitle.overrideStyled
+  );
+  const [position, setPosition] = useSetting(settings.subtitle.position);
+  const [style] = useSetting(settings.subtitleStyle);
+  const css = subtitleCss(style);
   return (
     <>
       <SettingsCard title="Language" description={ON_ACCOUNT}>
@@ -442,8 +484,11 @@ function SubtitlesSection() {
         />
       </SettingsCard>
       <SettingsCard title="Preview">
-        <div className="flex aspect-[16/5] items-end justify-center rounded-lg bg-gradient-to-br from-gray-700 to-gray-950 p-4">
-          <span className="rounded px-2 py-0.5 text-center text-lg" style={css}>
+        <div className="relative aspect-[16/5] rounded-lg bg-gradient-to-br from-gray-700 to-gray-950">
+          <span
+            className="absolute left-1/2 w-max max-w-[90%] -translate-x-1/2 rounded px-2 py-0.5 text-center text-lg"
+            style={{ ...css, bottom: `${100 - subtitleLine(style)}%` }}
+          >
             This is how subtitles will look.
           </span>
         </div>
@@ -470,6 +515,15 @@ function SubtitlesSection() {
           label="Bold"
           value={bold}
           onValueChange={setBold}
+        />
+        <Slider
+          label={`Height: ${position}%`}
+          help="How far subtitles sit above their usual place near the bottom."
+          min={0}
+          max={SUBTITLE_POSITION_MAX}
+          step={1}
+          value={[position]}
+          onValueChange={([v]) => setPosition(v)}
         />
       </SettingsCard>
       <SettingsCard title="Outline">
@@ -510,7 +564,7 @@ function SubtitlesSection() {
         <Switch
           side="right"
           label="Apply to styled subtitles too"
-          help="Styled subtitles, common in anime, keep their own look unless this is on. Only in the desktop app."
+          help="Styled subtitles, common in anime, keep their own fonts and colours unless this is on. Blu-ray and DVD subtitles always keep their look and size. Only in the desktop app."
           value={overrideStyled}
           onValueChange={setOverrideStyled}
         />
@@ -546,7 +600,7 @@ function updateStatus(update: UpdateState | null): string {
 }
 
 function UpdatesCard() {
-  const [setting, setSetting] = useUpdateChannel();
+  const [setting, setSetting] = useSetting(settings.desktop.updateChannel);
   const update = useUpdateState();
   const channel =
     setting === 'installed' ? (update?.channel ?? 'stable') : setting;
@@ -585,21 +639,105 @@ function UpdatesCard() {
   );
 }
 
+const DISCORD_LABELS: Record<DiscordEvent, { label: string; help?: string }> = {
+  playing: {
+    label: "What's playing",
+    help: 'The title, the episode and the time left.',
+  },
+  titles: {
+    label: 'Title pages',
+    help: 'The movie or show whose page is open.',
+  },
+  home: { label: 'Home' },
+  discover: { label: 'Discover' },
+  search: { label: 'Search', help: 'That you are searching, not what for.' },
+  calendar: { label: 'Calendar' },
+  favourites: { label: 'Favourites' },
+  activity: { label: 'Activity' },
+};
+
+function discordStatus(status: DiscordStatus | null): string {
+  switch (status?.state) {
+    case undefined:
+      return 'Checking…';
+    case 'connected':
+      return 'Connected to Discord.';
+    case 'not-found':
+      return 'Discord is not running on this computer.';
+    case 'failed':
+      return `Could not connect: ${status.message}`;
+    case 'refused':
+      return `Discord refused the status: ${status.message}`;
+  }
+}
+
+function DiscordEventSwitch({ event }: { event: DiscordEvent }) {
+  const [value, setValue] = useSetting(settings.discord[event]);
+  const { label, help } = DISCORD_LABELS[event];
+  return (
+    <Switch
+      side="right"
+      label={label}
+      help={help}
+      value={value}
+      onValueChange={setValue}
+    />
+  );
+}
+
+function DiscordCard() {
+  const [events] = useSetting(settings.discordEvents);
+  const any = Object.values(events).some(Boolean);
+  const status = useDiscordStatus();
+  React.useEffect(() => {
+    if (any) checkDiscord();
+  }, [any]);
+  return (
+    <SettingsCard
+      title="Discord"
+      description={`What your Discord profile shows. ${ON_DEVICE}`}
+    >
+      {DISCORD_EVENTS.map((event) => (
+        <DiscordEventSwitch key={event} event={event} />
+      ))}
+      {any && (
+        <SettingsRow label="Status" help={discordStatus(status)}>
+          <Button
+            intent="gray-outline"
+            className="w-full rounded-full sm:w-auto"
+            onClick={checkDiscord}
+          >
+            Check now
+          </Button>
+        </SettingsRow>
+      )}
+    </SettingsCard>
+  );
+}
+
+function AppSection() {
+  const app = currentHost().settings;
+  return (
+    <SettingsCard>
+      <SettingsRow label="App settings" help={app?.help}>
+        <Button
+          intent="gray-outline"
+          className="w-full rounded-full sm:w-auto"
+          onClick={app?.open}
+        >
+          Open
+        </Button>
+      </SettingsRow>
+    </SettingsCard>
+  );
+}
+
 function DesktopSection() {
   const server = useServerInfo();
-  const [shareOnDiscord, setShareOnDiscord] = useShareOnDiscord();
   return (
     <>
       <UpdatesCard />
-      <SettingsCard title="Discord" description={ON_DEVICE}>
-        <Switch
-          side="right"
-          label="Show what you're watching"
-          help="Your Discord profile shows the title, the episode and the time left while something plays. Discord has to be running on this computer."
-          value={shareOnDiscord}
-          onValueChange={setShareOnDiscord}
-        />
-      </SettingsCard>
+      <DiscordCard />
       <SettingsCard title="mpv">
         <SettingsRow
           label="mpv configuration"
@@ -659,13 +797,13 @@ const NOTHING = 'none';
 
 function InterfaceSection() {
   const views = useViews();
-  const [featured, setFeatured] = useFeatured();
-  const [heroMode, setHeroMode] = useHeroMode();
-  const [mergeNextUp, setMergeNextUp] = useMergeNextUp();
-  const [combineSearch, setCombineSearch] = useCombineSearch();
-  const [posterSize, setPosterSize] = usePosterSize();
-  const [posterLines, setPosterLines] = usePosterLines();
-  const [episodeLayout, setEpisodeLayout] = useEpisodeLayout();
+  const [featured, setFeatured] = useSetting(settings.featured);
+  const [heroMode, setHeroMode] = useSetting(settings.heroMode);
+  const [mergeNextUp, setMergeNextUp] = useSetting(settings.mergeNextUp);
+  const [combineSearch, setCombineSearch] = useSetting(settings.combineSearch);
+  const [posterSize, setPosterSize] = useSetting(settings.posterSize);
+  const [posterLines, setPosterLines] = useSetting(settings.posterLines);
+  const [episodeLayout, setEpisodeLayout] = useSetting(settings.episodeLayout);
 
   const featuredOptions = [
     {
@@ -784,10 +922,12 @@ function InterfaceSection() {
 }
 
 const KEEP_CSS_MS = 15_000;
+const DOCS_URL = 'https://docs.aiostreams.viren070.me';
+const CSS_DOCS_URL = `${DOCS_URL}/reference/web-app-css`;
 
 function ThemeSection() {
-  const [colors, setColors] = useThemeColors();
-  const [css, setCss] = useCustomCss();
+  const [colors, setColors] = useSetting(settings.themeColors);
+  const [css, setCss] = useSetting(settings.customCss);
   const [draft, setDraft] = React.useState(css);
   const accent = colors.accent ?? DEFAULT_ACCENT;
   const background = colors.background ?? DEFAULT_BACKGROUND;
@@ -888,6 +1028,16 @@ function ThemeSection() {
               <code>data-ui</code> attribute to style them by, such as{' '}
               <code>[data-ui=&quot;progress-bar&quot;]</code>. If it ever hides
               the page, add <code>?safe</code> to the address to turn it off.
+              See the{' '}
+              <a
+                href={CSS_DOCS_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[--brand] hover:underline"
+              >
+                guide
+              </a>{' '}
+              for every selector and examples.
             </>
           )
         }
@@ -1015,9 +1165,22 @@ function AccountSection() {
   );
 }
 
+const REPO_URL = 'https://github.com/Viren070/AIOStreams';
 /** The desktop app's stable release, whose notes link each download. */
-const DESKTOP_DOWNLOAD_URL =
-  'https://github.com/Viren070/AIOStreams/releases/tag/desktop';
+const DESKTOP_DOWNLOAD_URL = `${REPO_URL}/releases/tag/desktop`;
+
+const LINKS = [
+  {
+    name: 'Source code',
+    help: 'Where the app is made, and where to report a problem.',
+    url: REPO_URL,
+  },
+  {
+    name: 'Documentation',
+    help: 'How to use the app and what each setting does.',
+    url: `${DOCS_URL}/guides/app`,
+  },
+];
 
 function AboutSection() {
   const { client } = useSession();
@@ -1060,7 +1223,7 @@ function AboutSection() {
             </span>
           </SettingsRow>
         ))}
-        {playbackHost() === 'browser' && (
+        {currentHost().name === 'browser' && (
           <SettingsRow
             label="Desktop app"
             help="This web app with a player of its own, which plays what a browser can't, on Windows, Mac and Linux."
@@ -1076,6 +1239,17 @@ function AboutSection() {
             </Button>
           </SettingsRow>
         )}
+        {LINKS.map((link) => (
+          <SettingsRow key={link.name} label={link.name} help={link.help}>
+            <Button
+              intent="gray-outline"
+              className="w-full rounded-full sm:w-auto"
+              onClick={() => window.open(link.url, '_blank', 'noopener')}
+            >
+              Visit
+            </Button>
+          </SettingsRow>
+        ))}
       </SettingsCard>
       <SettingsCard title="Credits">
         {credits(shell).map((credit) => (
@@ -1144,6 +1318,7 @@ interface Section {
 }
 
 function sections(): Section[] {
+  const host = currentHost();
   return [
     {
       id: 'playback',
@@ -1156,8 +1331,7 @@ function sections(): Section[] {
     {
       id: 'audio',
       label: 'Audio',
-      description:
-        playbackHost() === 'shell' ? 'Language and output' : 'Language',
+      description: host.name === 'desktop' ? 'Language and output' : 'Language',
       icon: LuVolume2,
       group: 'Watching',
       Content: AudioSection,
@@ -1194,7 +1368,7 @@ function sections(): Section[] {
       group: 'App',
       Content: AccountSection,
     },
-    ...(playbackHost() === 'shell'
+    ...(host.name === 'desktop'
       ? [
           {
             id: 'desktop',
@@ -1206,10 +1380,22 @@ function sections(): Section[] {
           },
         ]
       : []),
+    ...(host.settings
+      ? [
+          {
+            id: 'app',
+            label: host.settings.label,
+            description: host.settings.description,
+            icon: LuAppWindow,
+            group: 'App',
+            Content: AppSection,
+          },
+        ]
+      : []),
     {
       id: 'about',
       label: 'About',
-      description: 'Versions',
+      description: 'Versions and links',
       icon: LuInfo,
       group: 'App',
       Content: AboutSection,

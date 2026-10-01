@@ -6,8 +6,10 @@ import {
   dispatchBulkMark,
   dispatchPlayback,
   dispatchListChange,
+  dispatchRating,
   type ListChangeInput,
   ensurePlaybackSink,
+  isRefusedUrl,
   itemKeyFor,
   PlaybackHandoffRepository,
   providerIdsFor,
@@ -17,6 +19,7 @@ import {
   type AIOStreams,
   type ContentRef,
   type JellyfinItem,
+  type JellyfinPersona,
   type PlaybackEventKind,
   type ResolvedPlaybackSink,
   type SinkStatus,
@@ -83,6 +86,38 @@ function pickedByOthers(ctx: JellyfinRequestContext): Set<string> {
   return presets;
 }
 
+/**
+ * What the users ahead of this persona picked: the primary user, then personas
+ * in order. Left on automatic, the primary user holds every tracker.
+ */
+async function claimedBefore(
+  ctx: JellyfinRequestContext
+): Promise<Set<string>> {
+  const primaryPicks = ctx.userData.jellyfin?.primary?.trackers;
+  const claimed = new Set(
+    primaryPicks ??
+      (await ctx.primaryEngine())
+        .getPlaybackSinks()
+        .flatMap((sink) => (sink.presetId ? [sink.presetId] : []))
+  );
+  for (const persona of personasOf(ctx.userData)) {
+    if (persona.id === ctx.persona?.id) break;
+    if (persona.history === 'shared') continue;
+    for (const id of persona.trackers ?? []) claimed.add(id);
+  }
+  return claimed;
+}
+
+function asViewer(
+  sink: ResolvedPlaybackSink,
+  persona: JellyfinPersona | null
+): ResolvedPlaybackSink {
+  if (!sink.viewers || !persona) return sink;
+  const query = new URLSearchParams(sink.query);
+  query.set('viewer', persona.id);
+  return { ...sink, query: `?${query}` };
+}
+
 /** A tracker that failed to load keeps its row; an outage is not giving it up. */
 function unloaded(
   engine: AIOStreams,
@@ -96,8 +131,9 @@ function unloaded(
 
 /**
  * Each tracker account belongs to one history. A user's explicit list is what
- * it claims; left on automatic, the primary user takes every tracker and a
- * persona of its own history only what its variants added.
+ * it claims, and a tracker two users pick goes to the first; left on automatic,
+ * the primary user takes every tracker and a persona of its own history only
+ * what its variants added. A tracker that keeps users apart serves them all.
  */
 async function resolveSinks(
   ctx: JellyfinRequestContext,
@@ -114,21 +150,25 @@ async function resolveSinks(
     };
   }
   const engine = await ctx.engine();
-  const own = engine.getPlaybackSinks();
+  // A different address, so `ownSinks` keeps it beside the primary user's.
+  const own = engine
+    .getPlaybackSinks()
+    .map((sink) => asViewer(sink, ctx.persona));
   const picks = ctx.persona?.trackers;
   if (picks) {
     let sinks = picked(own, picks);
-    if (!primaryPicks && sinks.length) {
-      const held = new Set(
-        (await ctx.primaryEngine()).getPlaybackSinks().map((s) => s.presetId)
+    if (sinks.some((sink) => !sink.viewers)) {
+      const claimed = await claimedBefore(ctx);
+      sinks = sinks.filter(
+        (sink) => sink.viewers || !claimed.has(sink.presetId!)
       );
-      sinks = sinks.filter((sink) => !held.has(sink.presetId));
     }
     return { sinks, unloaded: unloaded(engine, picks) };
   }
   const taken = pickedByOthers(ctx);
   const sinks = (await ownSinks(ctx, own)).filter(
-    (sink) => sink.presetId === undefined || !taken.has(sink.presetId)
+    (sink) =>
+      sink.viewers || sink.presetId === undefined || !taken.has(sink.presetId)
   );
   return { sinks, unloaded: unloaded(engine, undefined) };
 }
@@ -214,6 +254,8 @@ export interface TrackerStatus {
   /** Absent when the addon or this instance does not use that direction. */
   push?: TrackerExchange;
   pull?: TrackerExchange;
+  /** Its address is private and this instance does not connect to those. */
+  refused?: boolean;
 }
 
 export interface TrackerOption {
@@ -221,6 +263,8 @@ export interface TrackerOption {
   user: string;
   presetId: string;
   addon: string;
+  /** Can be picked for several users. */
+  viewers: boolean;
 }
 
 /**
@@ -243,6 +287,30 @@ export async function listTrackers(
   ]);
   const rowOf = new Map(
     rows.map((row) => [`${row.persona}|${row.addonInstanceId}`, row])
+  );
+  // With its address refused the manifest never loads, so only its row is left.
+  const unloaded = contexts.map((ctx, i) => {
+    const live = new Set(resolved[i].map((sink) => sink.instanceId));
+    return rows.filter(
+      (row) =>
+        row.persona === ctx.watch.persona &&
+        row.retiredAt === null &&
+        !live.has(row.addonInstanceId) &&
+        engines[i].getAddon(row.addonInstanceId)
+    );
+  });
+  const baseUrls = [
+    ...new Set([
+      ...resolved.flat().map((sink) => sink.baseUrl),
+      ...unloaded.flat().map((row) => row.baseUrl),
+    ]),
+  ];
+  const refusedUrls = new Set(
+    (
+      await Promise.all(
+        baseUrls.map(async (url) => ((await isRefusedUrl(url)) ? url : null))
+      )
+    ).filter((url) => url !== null)
   );
 
   const { reportEnabled, pullEnabled } = appConfig.watchState;
@@ -269,10 +337,25 @@ export async function listTrackers(
                 error: row?.lastPullError ?? null,
               }
             : undefined,
+          ...(refusedUrls.has(sink.baseUrl) ? { refused: true } : {}),
         },
       ];
     })
   );
+  contexts.forEach((ctx, i) => {
+    for (const row of unloaded[i]) {
+      if (!refusedUrls.has(row.baseUrl)) continue;
+      trackers.push({
+        addon:
+          row.addonName ??
+          engines[i].getAddon(row.addonInstanceId)?.name ??
+          row.addonInstanceId,
+        persona: ctx.persona?.id,
+        status: row.status,
+        refused: true,
+      });
+    }
+  });
   const available = contexts.flatMap((ctx, i) => {
     const seen = new Set<string>();
     return engines[i].getPlaybackSinks().flatMap((sink): TrackerOption[] => {
@@ -285,6 +368,7 @@ export async function listTrackers(
           user: ctx.persona?.id ?? '',
           presetId: sink.presetId,
           addon: sink.name,
+          viewers: !!sink.viewers,
         },
       ];
     });
@@ -293,15 +377,15 @@ export async function listTrackers(
 }
 
 /**
- * A tracker keys on the show, so an episode reports the series item's ids and
- * never its own; the series meta is cached by the episode build.
+ * A tracker keys on the show, so an episode or season reports the series
+ * item's ids and never its own; the series meta is cached by the episode build.
  */
 async function idsFor(
   ctx: JellyfinRequestContext,
   ref: ContentRef,
   item?: JellyfinItem | null
 ): Promise<Record<string, string>> {
-  if (ref.episode == null) {
+  if (ref.kind === 'movie' || ref.kind === 'series') {
     const own = (item?.ProviderIds as Record<string, string> | undefined) ?? {};
     return Object.keys(own).length
       ? own
@@ -387,6 +471,36 @@ export async function reportListChange(
         err: error instanceof Error ? error.message : String(error),
       },
       'failed to report a list change to addons'
+    );
+  }
+}
+
+export async function reportRating(
+  ctx: JellyfinRequestContext,
+  ref: ContentRef,
+  rating: number | null,
+  item?: JellyfinItem | null
+): Promise<void> {
+  if (!appConfig.watchState.reportEnabled) return;
+  try {
+    const sinks = await sinksFor(ctx);
+    if (!sinks.length) return;
+    await dispatchRating(ctx.watch, sinks, {
+      kind: rating == null ? 'unrated' : 'rated',
+      scope: ref.kind,
+      type: ref.type,
+      metaId: ref.baseId,
+      itemKey: itemKeyFor(ref),
+      videoId: ref.videoId,
+      season: ref.season,
+      episode: ref.episode,
+      rating: rating ?? undefined,
+      providerIds: await idsFor(ctx, ref, item),
+    });
+  } catch (error) {
+    logger.warn(
+      { err: error instanceof Error ? error.message : String(error) },
+      'failed to report a rating to addons'
     );
   }
 }

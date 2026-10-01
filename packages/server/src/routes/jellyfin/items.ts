@@ -29,6 +29,7 @@ import {
   hasProgrammeVideos,
   identityFor,
   isLeafEntry,
+  isUnairedEpisode,
   itemKeyFor,
   placeholderMediaSource,
   playableSources,
@@ -43,6 +44,8 @@ import {
   stripInternal,
   subtitleFormatFor,
   msToTicks,
+  ratingUserData,
+  seasonAnimeIds,
   userDataFromRow,
   watchRowsFor,
   writeMemoPointer,
@@ -65,7 +68,7 @@ import {
   ANDROID_PLAYER_CLIENT,
   type JellyfinRequestContext,
 } from './context.js';
-import { getMetaLoose, resolveMarkerId, resolvePlayback } from './resolve.js';
+import { getMeta, resolveMarkerId, resolvePlayback } from './resolve.js';
 
 export function contentRefOf(d: ContentDescriptor): ContentRef {
   switch (d.k) {
@@ -80,6 +83,8 @@ export function contentRefOf(d: ContentDescriptor): ContentRef {
       };
     case 'movie':
       return { kind: 'movie', type: d.t, baseId: d.i, videoId: d.i };
+    case 'season':
+      return { kind: 'season', type: d.t, baseId: d.i, season: d.s };
     default:
       return { kind: 'series', type: d.t, baseId: d.i };
   }
@@ -152,8 +157,7 @@ export async function attachUserData(
       item.UserData = withPlayedCounts(
         {
           ...(item.UserData as UserItemDataDto),
-          ...(row ? { IsFavorite: row.favorite } : {}),
-          ...(row?.dropped ? { Likes: false } : {}),
+          ...(row ? { IsFavorite: row.favorite, ...ratingUserData(row) } : {}),
         },
         played.length,
         aired.length
@@ -165,7 +169,7 @@ export async function attachUserData(
       item.UserData = {
         ...(item.UserData as object),
         IsFavorite: row.favorite,
-        ...(row.dropped ? { Likes: false } : {}),
+        ...ratingUserData(row),
       };
     } else {
       const runtimeMs =
@@ -268,17 +272,39 @@ export async function seasonsForSeries(
   seriesItem: JellyfinItem;
   seasons: JellyfinItem[];
 } | null> {
-  const meta = await getMetaLoose(ctx, d.t, d.i);
+  const meta = await getMeta(ctx, d.t, d.i);
   if (!meta) return null;
   const seriesItem = buildContentItem(ctx.build, { ...meta, type: d.t });
   const groups = groupSeasons(meta, true);
-  const states = await watchRowsFor(
-    ctx.watch,
-    groups.flatMap((g) => g.videos.map((v) => episodeRef(meta, g, v)))
-  );
+  const seasonRef = (season: number): ContentRef => ({
+    kind: 'season',
+    type: meta.type,
+    baseId: meta.id,
+    season,
+  });
+  const [states, animeIds] = await Promise.all([
+    watchRowsFor(ctx.watch, [
+      ...groups.flatMap((g) => g.videos.map((v) => episodeRef(meta, g, v))),
+      ...groups.map((g) => seasonRef(g.season)),
+    ]),
+    seasonAnimeIds(
+      meta,
+      seriesItem.ProviderIds as Record<string, string> | undefined,
+      groups.map((g) => g.season)
+    ),
+  ]);
   const seasons = groups.map((g) =>
-    buildSeason(ctx.build, meta, seriesItem, g, states, (v) =>
-      episodeKey(meta, g, v)
+    buildSeason(
+      ctx.build,
+      meta,
+      seriesItem,
+      g,
+      states,
+      (v) => episodeKey(meta, g, v),
+      {
+        row: states.get(itemKeyFor(seasonRef(g.season))),
+        providerIds: animeIds.get(g.season),
+      }
     )
   );
   return { meta, seriesItem, seasons };
@@ -293,7 +319,7 @@ export async function episodesForSeries(
   seriesItem: JellyfinItem;
   episodes: JellyfinItem[];
 } | null> {
-  const meta = await getMetaLoose(ctx, d.t, d.i);
+  const meta = await getMeta(ctx, d.t, d.i);
   if (!meta) return null;
   const seriesItem = buildContentItem(ctx.build, { ...meta, type: d.t });
   const groups = groupSeasons(meta, true).filter(
@@ -327,7 +353,7 @@ export async function boxSetChildren(
   boxset: JellyfinItem;
   children: JellyfinItem[];
 } | null> {
-  const meta = await getMetaLoose(ctx, d.t, d.i);
+  const meta = await getMeta(ctx, d.t, d.i);
   if (meta?.collection) {
     const { items } = await collectionMembers(await ctx.engine(), meta, {
       startIndex: 0,
@@ -408,7 +434,7 @@ export async function itemFromDescriptor(
     case 'source':
       return null;
     case 'boxset': {
-      const meta = await getMetaLoose(ctx, d.t, d.i);
+      const meta = await getMeta(ctx, d.t, d.i);
       if (!meta || (!meta.collection && !meta.videos?.length)) return null;
       const item = buildContentItem(
         ctx.build,
@@ -419,7 +445,7 @@ export async function itemFromDescriptor(
     }
     case 'movie':
     case 'series': {
-      const meta = await getMetaLoose(ctx, d.t, d.i);
+      const meta = await getMeta(ctx, d.t, d.i);
       if (!meta && d.k === 'movie' && d.p) {
         // A collection's movie may exist only as an entry in its parent.
         const id = encodeItemId(d);
@@ -455,7 +481,7 @@ export async function itemFromDescriptor(
       return r?.seasons.find((s) => s.IndexNumber === d.s) ?? null;
     }
     case 'episode': {
-      const meta = await getMetaLoose(ctx, d.t, d.i);
+      const meta = await getMeta(ctx, d.t, d.i);
       if (!meta) return null;
       const seriesItem = buildContentItem(ctx.build, { ...meta, type: d.t });
       const groups = groupSeasons(meta, true);
@@ -543,60 +569,90 @@ export async function summaryItem(
   return item;
 }
 
+function isPlayed(item: JellyfinItem): boolean {
+  return (item.UserData as { Played: boolean }).Played;
+}
+
+/**
+ * A show's episodes and the furthest one watched, which Next Up goes on from,
+ * as Jellyfin's does. One part-way through past it comes back as `resume`.
+ */
+async function watchingPosition(
+  ctx: JellyfinRequestContext,
+  d: { t: string; i: string },
+  last?: WatchStateRow
+): Promise<{
+  eps: JellyfinItem[];
+  from: number;
+  resume?: JellyfinItem;
+} | null> {
+  const res = await episodesForSeries(ctx, d);
+  if (!res) return null;
+  const eps = res.episodes.filter((e) => e.ParentIndexNumber !== 0);
+  let from = eps.findLastIndex(isPlayed);
+  if (!last) return { eps, from };
+  const lastId = encodeItemId({
+    k: 'episode',
+    t: last.mediaType,
+    i: seriesIdOf(last.baseId, last.videoId, last.mediaType),
+    s: last.season ?? 1,
+    e: last.episode ?? 0,
+    v: last.videoId ?? '',
+  });
+  let idx = eps.findIndex((e) => e.Id === lastId);
+  // A row from another id space can only name its episode by number.
+  if (idx < 0 && last.episode != null)
+    idx = eps.findIndex(
+      (e) =>
+        e.ParentIndexNumber === (last.season ?? 1) &&
+        e.IndexNumber === last.episode
+    );
+  if (idx > from) {
+    const anchor = eps[idx];
+    if (isResumable(anchor)) return { eps, from, resume: anchor };
+    // The list only sees this row when a match key links the two spellings.
+    if (!last.played && last.positionMs > 0)
+      return {
+        eps,
+        from,
+        resume: { ...anchor, UserData: userDataFromRow(anchor.Id, last) },
+      };
+    if (last.played) from = idx;
+  }
+  return { eps, from };
+}
+
 export async function nextUpForSeries(
   ctx: JellyfinRequestContext,
   d: { t: string; i: string },
   last?: WatchStateRow,
   opts: { includeResumable?: boolean } = {}
 ): Promise<JellyfinItem | null> {
-  const res = await episodesForSeries(ctx, d);
-  if (!res) return null;
-  const eps = res.episodes.filter(
-    (e) => e.LocationType !== 'Virtual' && e.ParentIndexNumber !== 0
-  );
-  if (!eps.length) return null;
-  let next: JellyfinItem | null | undefined;
-  if (last) {
-    const lastId = encodeItemId({
-      k: 'episode',
-      t: last.mediaType,
-      i: seriesIdOf(last.baseId, last.videoId, last.mediaType),
-      s: last.season ?? 1,
-      e: last.episode ?? 0,
-      v: last.videoId ?? '',
-    });
-    let idx = eps.findIndex((e) => e.Id === lastId);
-    // A row from another id space can only name its episode by number.
-    if (idx < 0 && last.episode != null)
-      idx = eps.findIndex(
-        (e) =>
-          e.ParentIndexNumber === (last.season ?? 1) &&
-          e.IndexNumber === last.episode
-      );
-    if (idx >= 0) {
-      const anchor = eps[idx];
-      if (isResumable(anchor)) next = anchor;
-      // The list only sees this row when a match key links the two spellings.
-      else if (!last.played && last.positionMs > 0)
-        next = { ...anchor, UserData: userDataFromRow(anchor.Id, last) };
-      else next = eps[idx + 1] ?? null;
-    }
-    // The anchor may sit mid-run, so fall through rather than offer a rewatch.
-    if (
-      next &&
-      !isResumable(next) &&
-      (next.UserData as { Played: boolean }).Played
-    )
-      next = undefined;
-  }
-  if (next === undefined)
-    next = eps.find((e) => !(e.UserData as { Played: boolean }).Played) ?? null;
-
+  const at = await watchingPosition(ctx, d, last);
+  if (!at) return null;
+  const next =
+    at.resume ??
+    at.eps
+      .slice(at.from + 1)
+      .find((e) => !isUnairedEpisode(e) && !isPlayed(e)) ??
+    null;
   if (next && opts.includeResumable === false && isResumable(next)) return null;
   return next;
 }
 
-function resolveOnOpen(ctx: JellyfinRequestContext): boolean {
+/** The next episode to air, or null while the show has a Next Up. */
+export async function nextToAir(
+  ctx: JellyfinRequestContext,
+  d: { t: string; i: string },
+  last: WatchStateRow
+): Promise<JellyfinItem | null> {
+  const at = await watchingPosition(ctx, d, last);
+  if (!at || at.resume) return null;
+  const ahead = at.eps.slice(at.from + 1).filter((e) => !isPlayed(e));
+  return ahead.some((e) => !isUnairedEpisode(e)) ? null : (ahead[0] ?? null);
+}
+
+function resolveOnOpen(ctx: JellyfinRequestContext, asked = false): boolean {
   // An API key looks items up and never plays them.
   if (ctx.apiKey) return false;
   switch (appConfig.jellyfin.resolveOnOpen) {
@@ -605,7 +661,7 @@ function resolveOnOpen(ctx: JellyfinRequestContext): boolean {
     case 'never':
       return false;
     default:
-      return ctx.userData.jellyfin?.resolveOnOpen ?? true;
+      return asked || (ctx.userData.jellyfin?.resolveOnOpen ?? true);
   }
 }
 
@@ -659,6 +715,7 @@ export function mediaSourcesFrom(
       subtitleFormat: format,
       subtitleUrl: subtitleUrlFor(memo.itemId, record.msid),
       subtitleToken: token,
+      playSessionId: memo.psid,
       protocol: ctx.client.name === ANDROID_PLAYER_CLIENT ? 'File' : 'Http',
       runtimeMs: memo.runtimeMs,
       includeExtension: true,
@@ -666,6 +723,32 @@ export function mediaSourcesFrom(
       noticePath: nothingToPlayPath(req, ctx),
     })
   );
+}
+
+/** Lets the "Load versions" id, a hash, lead back to its item. */
+function rememberMarker(ctx: JellyfinRequestContext, itemId: string): string {
+  const marker = resolveMarkerId(ctx, itemId);
+  void writeMemoPointer(marker, {
+    uuid: ctx.uuid,
+    encryptedPassword: ctx.encryptedPassword,
+    itemId,
+    persona: ctx.persona?.id,
+  }).catch(() => undefined);
+  return marker;
+}
+
+/** List rows offer the marker as well, for clients that never open the item. */
+export function rememberListMarkers(
+  ctx: JellyfinRequestContext,
+  items: JellyfinItem[]
+): void {
+  if (!ctx.build.listVersions) return;
+  for (const item of items) {
+    const sources = item.MediaSources as JellyfinMediaSource[] | undefined;
+    const marker = resolveMarkerId(ctx, String(item.Id));
+    if (sources?.some((s) => s.Id === marker))
+      rememberMarker(ctx, String(item.Id));
+  }
 }
 
 export function placeholderSources(
@@ -678,16 +761,9 @@ export function placeholderSources(
   if (resolved) {
     return [placeholderMediaSource(itemId, 'No streams found', path)];
   }
-  const marker = resolveMarkerId(ctx, itemId);
-  void writeMemoPointer(marker, {
-    uuid: ctx.uuid,
-    encryptedPassword: ctx.encryptedPassword,
-    itemId,
-    persona: ctx.persona?.id,
-  }).catch(() => undefined);
   return [
     placeholderMediaSource(itemId, 'Streams resolve on play', path),
-    placeholderMediaSource(marker, 'Load versions', path),
+    placeholderMediaSource(rememberMarker(ctx, itemId), 'Load versions', path),
   ];
 }
 
@@ -700,7 +776,7 @@ export async function detailItem(
     forceResolve?: boolean;
     requestedMsid?: string;
     overrideId?: string;
-    /** Lookups that did not ask for a version list never resolve. */
+    /** `true`: the client asked for versions, which beats the user's switch. `false` never resolves. */
     resolve?: boolean;
   } = {}
 ): Promise<JellyfinItem | null> {
@@ -721,7 +797,8 @@ export async function detailItem(
       ? existing
       : null;
   const shouldResolve =
-    opts.resolve !== false && (opts.forceResolve || resolveOnOpen(ctx));
+    opts.resolve !== false &&
+    (opts.forceResolve || resolveOnOpen(ctx, opts.resolve));
   const resolveNow = async () => {
     if (!opts.forceResolve && !(await stremioStreamRateLimiter.tryConsume(req)))
       return null;
@@ -747,12 +824,26 @@ export async function detailItem(
   return item;
 }
 
+/** Decodes an id, following a version's id to its item. */
+export async function decodeItemForRequest(
+  ctx: JellyfinRequestContext,
+  raw: string
+): Promise<JellyfinDescriptor | null> {
+  let decoded = await decodeForRequest(ctx, raw);
+  if (decoded?.kind === 'source') {
+    const pointer = await resolveByMediaSource(decoded.msid);
+    if (!pointer || pointer.uuid !== ctx.uuid) return null;
+    decoded = await decodeForRequest(ctx, pointer.itemId);
+  }
+  return decoded?.kind === 'descriptor' ? decoded.descriptor : null;
+}
+
 /** `/Items/{id}` where id may be a content id, a media source id or a resolve marker. */
 export async function itemForId(
   req: Request,
   ctx: JellyfinRequestContext,
   raw: string,
-  opts: { resolve?: boolean } = {}
+  opts: { resolve?: boolean; listed?: boolean } = {}
 ): Promise<JellyfinItem | null> {
   const decoded = await decodeForRequest(ctx, raw);
   if (!decoded) return null;
@@ -763,8 +854,14 @@ export async function itemForId(
     if (!inner || inner.kind !== 'descriptor') return null;
     const d = inner.descriptor as ContentDescriptor;
     // The marker id is derived from the item, so recognising it needs no state.
+    // Opening it asks for versions; a list only names it.
     if (decoded.msid === resolveMarkerId(ctx, pointer.itemId)) {
-      return detailItem(req, ctx, d, { forceResolve: true });
+      return detailItem(
+        req,
+        ctx,
+        d,
+        opts.listed ? { resolve: opts.resolve } : { forceResolve: true }
+      );
     }
     // A client asking by source id expects it first, under the item's own id.
     return detailItem(req, ctx, d, {

@@ -1,5 +1,109 @@
 # Changelog
 
+## [2.35.7](https://github.com/Viren070/AIOStreams/compare/v2.35.6...v2.35.7) (2026-10-01)
+
+
+### Features
+
+* **jellyfin-web:** add an Android app settings tab that opens the app's settings ([9508271](https://github.com/Viren070/AIOStreams/commit/95082715f10bb5f94bcdaada5b366e1ceaa23279))
+* **jellyfin-web:** move app bridges behind one host interface ([9102d6e](https://github.com/Viren070/AIOStreams/commit/9102d6efb20190300a13217799cb1548d9123054))
+* **jellyfin-web:** use more of the Android app's bridge ([2a75f88](https://github.com/Viren070/AIOStreams/commit/2a75f88aefeb69185c34100ccdc58d0bc7b284a0))
+* **jellyfin:** list the next episode of caught-up shows in Upcoming ([0840b88](https://github.com/Viren070/AIOStreams/commit/0840b8839ba57362f925829e1a8dbb3a2d7123c6))
+
+
+### Bug Fixes
+
+* **jellyfin:** drop the anime/series fallback on meta requests ([2a7569b](https://github.com/Viren070/AIOStreams/commit/2a7569bd4fbea3fca613fcaee0b1f95431d8dc1a))
+* **jellyfin:** go on from the furthest watched episode in Next Up ([c77e031](https://github.com/Viren070/AIOStreams/commit/c77e031405efe58bad4c6809de8310866a7ed8f9))
+* **watch-state:** return one recent series row per show across its ids ([5389d49](https://github.com/Viren070/AIOStreams/commit/5389d49d8e1ffe128326cc3ef1918b00581eaf88))
+
+## [2.35.6](https://github.com/Viren070/AIOStreams/compare/v2.35.5...v2.35.6) (2026-10-01)
+
+
+### Features
+
+* **frontend:** open the desktop app from the install card ([3646b0e](https://github.com/Viren070/AIOStreams/commit/3646b0ea7b22e71b5eacac93e0d1126ca450fa5d))
+* **jellyfin-web:** send skip actions to the Android app's player ([f2345c2](https://github.com/Viren070/AIOStreams/commit/f2345c2fe1f1a169571c6c2d23425f9a49a93d5a))
+* **jellyfin-web:** show a message for no libraries ([563126e](https://github.com/Viren070/AIOStreams/commit/563126e324678d9a5c632252d52a49812ce315e5))
+* **jellyfin:** append client device/name to user agent for variants ([be4b308](https://github.com/Viren070/AIOStreams/commit/be4b308d6eff72eedeb61cdaafcf2b37cab97560))
+* **jellyfin:** link the configuration's own page when the address names it ([8673164](https://github.com/Viren070/AIOStreams/commit/86731647ab1cd861813b5712865cb3c4cb943c18))
+
+
+### Bug Fixes
+
+* **jellyfin:** line up the single-item and Ids lookups ([b34976c](https://github.com/Viren070/AIOStreams/commit/b34976c7e40bcc10f8db96391836de1333bdc170))
+* **jellyfin:** look up season anime ids by the show's own id ([f9a9fbb](https://github.com/Viren070/AIOStreams/commit/f9a9fbb4ff7d2b9715385932f1030e1606e1f197))
+* **jellyfin:** look up stream and subtitle requests under their play session's scope ([759ae6b](https://github.com/Viren070/AIOStreams/commit/759ae6b590e63144a0228fcef93640aed09b6868))
+* **metadata:** pass original language into TMDB title dedup ([#1408](https://github.com/Viren070/AIOStreams/issues/1408)) ([cce26dd](https://github.com/Viren070/AIOStreams/commit/cce26dda70aa60e68fa4ce35c4f99ddc205551ac))
+* **schemas:** drop a video's ratings when they are not a list ([9d1dfdb](https://github.com/Viren070/AIOStreams/commit/9d1dfdb658fd5ac21ee80db3b9908ffca45640af))
+* **usenet:** list only SABnzbd-added rows in the SABnzbd queue and history ([5351691](https://github.com/Viren070/AIOStreams/commit/535169126a44a01fe5083025f205b8d26639a6a4))
+
+## [2.35.5](https://github.com/Viren070/AIOStreams/compare/v2.35.4...v2.35.5) (2026-09-30)
+
+
+### Features
+
+* **core:** replace per-feature private URL settings with ALLOW_PRIVATE_URLS ([c3853ca](https://github.com/Viren070/AIOStreams/commit/c3853ca30a977dc062252dbc198232fd43b35273))
+* **desktop:** drive the system's media controls from a shared now-playing state ([89f4671](https://github.com/Viren070/AIOStreams/commit/89f4671a7e376d2b688b3fa41dfbd31313b72902))
+* flag libraries that need a genre ([a079079](https://github.com/Viren070/AIOStreams/commit/a07907931dc0039729a5245f63381ca84fa55c2f))
+* **frontend:** add a None option to a user's trackers ([16aa997](https://github.com/Viren070/AIOStreams/commit/16aa99710f7237662245068bbe4283c8d58a7e4b))
+* **frontend:** announce new releases to nightly users by their base version ([0ab165c](https://github.com/Viren070/AIOStreams/commit/0ab165c414fbe3c427a4439aa890e7f6a6deef32))
+* **frontend:** ask for the configuration password in the profile card ([86c3ffb](https://github.com/Viren070/AIOStreams/commit/86c3ffb4cbdbdff76a347c1373f5d32908a94bc4))
+* **frontend:** show the release a nightly is built on in What's new ([3dcc603](https://github.com/Viren070/AIOStreams/commit/3dcc6030c520ab0be4b157b6c0e90e543ec61ba3))
+* **jellyfin-web:** add a subtitle height setting ([fad3c78](https://github.com/Viren070/AIOStreams/commit/fad3c78cd2c658fa77f21bd1a4874acf101c134e))
+* **jellyfin-web:** link the custom CSS guide from the theme settings ([db4b778](https://github.com/Viren070/AIOStreams/commit/db4b778731216c12dd144bba8325295f67111f71))
+* **jellyfin-web:** link the source code and documentation from About ([f0bae05](https://github.com/Viren070/AIOStreams/commit/f0bae05dc219d2922229c2163db28b64d948e4be))
+* **jellyfin-web:** open aiostreams:// links ([33caebd](https://github.com/Viren070/AIOStreams/commit/33caebd9126ce2d13ef3b0e10a91d8b5fb5efdfd))
+* **jellyfin-web:** rate movies, shows and seasons from their page ([e222942](https://github.com/Viren070/AIOStreams/commit/e222942403cd8aa82fc4ee92e2b5ea1d7853b76f))
+* **jellyfin-web:** replace the player's volume range with a bar that marks the boost ([6922932](https://github.com/Viren070/AIOStreams/commit/6922932d41093a0b200f4f44dcabc4125ca87d18))
+* **jellyfin-web:** send now-playing to the desktop app and set the browser's media session ([f5c790f](https://github.com/Viren070/AIOStreams/commit/f5c790f47b42b89b572ea62de19a7cb47c7e780d))
+* **jellyfin-web:** take the player's top volume from mpv's volume-max ([e99ce70](https://github.com/Viren070/AIOStreams/commit/e99ce707dd77d4810904ab2b687e89ddf283a036))
+* **jellyfin:** add a setting to stop marking unaired episodes ([1bfc82b](https://github.com/Viren070/AIOStreams/commit/1bfc82b90b2c1041ae656fb34de08b17427023f9))
+* **watch-state:** keep ratings and likes, and push and pull ratings ([f85758d](https://github.com/Viren070/AIOStreams/commit/f85758dee209d443471f3bfb54da754c39c3ae5f)), closes [#1359](https://github.com/Viren070/AIOStreams/issues/1359)
+* **watch-state:** make the resume and played thresholds configurable ([597e463](https://github.com/Viren070/AIOStreams/commit/597e4630c4005588ea98fa8d821e05e71d6a6f76))
+
+
+### Bug Fixes
+
+* **core/sync:** remove the DNS pre-check on user sync URLs ([13fc300](https://github.com/Viren070/AIOStreams/commit/13fc300efa3cf348798283f9020e664827c5ea08)), closes [#1401](https://github.com/Viren070/AIOStreams/issues/1401)
+* **desktop:** don't scale disc subtitles, keep styled ones in the crop ([907867d](https://github.com/Viren070/AIOStreams/commit/907867d81bbd53b16b8bb9ebbf85905de2a124e7))
+* **jellyfin-web:** send None for featured catalogs that need a genre ([0470d74](https://github.com/Viren070/AIOStreams/commit/0470d74a519d9e99bd8c28ffef63b2c64a53ed3f))
+* **jellyfin-web:** size and place browser subtitle cues ([3021081](https://github.com/Viren070/AIOStreams/commit/3021081760d01018a8d349f16aed2f299b685953))
+* **ui:** pan carousel rows with a trackpad or mouse wheel ([#1394](https://github.com/Viren070/AIOStreams/issues/1394)) ([736d6c4](https://github.com/Viren070/AIOStreams/commit/736d6c4dae8ec3d6f429ee33c1b078ca349ca81f))
+* **watch-state:** keep history for as long as a configuration is in use ([1a7f39f](https://github.com/Viren070/AIOStreams/commit/1a7f39fc3da2876b155718da6a8f495cb6aaac47))
+* **watch-state:** match drops against every id a show is stored under ([d029954](https://github.com/Viren070/AIOStreams/commit/d029954da44802fbb152ca5583aa2b468c45cdb0))
+
+## [2.35.4](https://github.com/Viren070/AIOStreams/compare/v2.35.3...v2.35.4) (2026-09-28)
+
+
+### Features
+
+* adjust jellyfin wording/install options, update docs, readme ([d461cd7](https://github.com/Viren070/AIOStreams/commit/d461cd76ef43c34f270d8a93a6f721f42071b528))
+* **builtins/nab:** warn on missing infohash, fix hash-fallback bug ([#1261](https://github.com/Viren070/AIOStreams/issues/1261)) ([8b5aa22](https://github.com/Viren070/AIOStreams/commit/8b5aa22e397d9378216ecc1e0ccfd353fcd88e9e))
+* **desktop:** add Discord events for browsing and a connection status ([eb193b4](https://github.com/Viren070/AIOStreams/commit/eb193b47ff45fe30604c3ed66b0829509ccc7cf5))
+
+## [2.35.3](https://github.com/Viren070/AIOStreams/compare/v2.35.2...v2.35.3) (2026-09-28)
+
+
+### Features
+
+* add a show on home modifier for catalogs that require a genre ([a780805](https://github.com/Viren070/AIOStreams/commit/a78080578d3ea3b2df5989856aa7c528e6deb6c0))
+* **core:** add per-addon catalog defaults ([063b018](https://github.com/Viren070/AIOStreams/commit/063b018947f646cb8774c28a85fca64f813e3e4e))
+* **frontend:** rework the catalog editor ([1c6f2c0](https://github.com/Viren070/AIOStreams/commit/1c6f2c0c466136d440d4dda007d6747e4e276947))
+* **jellyfin-web:** add a per-segment skip setting ([b66d07a](https://github.com/Viren070/AIOStreams/commit/b66d07a016881a8a4a4fd208098195c7b4a3a5bc))
+* **jellyfin:** send persona ids to trackers that declare watchState.viewers ([ffd98bd](https://github.com/Viren070/AIOStreams/commit/ffd98bd0897df74e2e7f392bab438c9e2732ac7a))
+
+
+### Bug Fixes
+
+* **jellyfin:** apply variants before syncing and validating the config ([1764e37](https://github.com/Viren070/AIOStreams/commit/1764e37f17682e303123808a1e4c7e89e11e261e))
+* **ui:** declare the dark color scheme before the app loads ([ec93f12](https://github.com/Viren070/AIOStreams/commit/ec93f125245d9d9da535f006413aa6a2f2d1f8de))
+
+
+### Miscellaneous Chores
+
+* update header presets ([#1383](https://github.com/Viren070/AIOStreams/issues/1383)) ([a1f783c](https://github.com/Viren070/AIOStreams/commit/a1f783c966f4e00bbf7a735dc8b13df92c13a6a1))
+
 ## [2.35.2](https://github.com/Viren070/AIOStreams/compare/v2.35.1...v2.35.2) (2026-09-27)
 
 

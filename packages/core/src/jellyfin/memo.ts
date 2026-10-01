@@ -5,6 +5,7 @@ import { getSimpleTextHash } from '../utils/crypto.js';
 import { userScopeKey } from '../utils/user-scope.js';
 import type { UserData } from '../db/schemas.js';
 import type { MemoPointer, PlaybackMemo } from './types.js';
+import { firstWriteOf } from './write-once.js';
 
 /*
  * Long because a client holds credential-less stream URLs for the length of
@@ -64,7 +65,12 @@ export async function writePlaybackMemo(
       PLAYBACK_MEMO_TTL,
       true
     ),
-    pointers.set(`psid:${memo.psid}`, pointer, PLAYBACK_MEMO_TTL, true),
+    pointers.set(
+      `psid:${memo.psid}`,
+      { ...pointer, scope },
+      PLAYBACK_MEMO_TTL,
+      true
+    ),
     ...memo.sources.map((s) =>
       pointers.set(`msid:${s.msid}`, pointer, PLAYBACK_MEMO_TTL, true)
     ),
@@ -79,6 +85,8 @@ export async function writeMemoPointer(
   id: string,
   pointer: MemoPointer
 ): Promise<void> {
+  const key = `ptr:${id}:${pointer.encryptedPassword}:${pointer.persona ?? ''}`;
+  if (!firstWriteOf(key)) return;
   await pointers
     .set(`msid:${id}`, pointer, PLAYBACK_MEMO_TTL, true)
     .catch(() => undefined);

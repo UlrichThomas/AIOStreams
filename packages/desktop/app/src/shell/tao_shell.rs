@@ -4,19 +4,22 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use aiostreams_desktop_core::bridge::{Inbound, Outbound, origin};
+use aiostreams_desktop_core::discord;
 use tao::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopWindowTarget};
 #[cfg(target_os = "macos")]
 use tao::platform::macos::WindowBuilderExtMacOS;
 #[cfg(windows)]
-use tao::platform::windows::WindowBuilderExtWindows;
+use tao::platform::windows::{WindowBuilderExtWindows, WindowExtWindows};
 use tao::window::{Fullscreen, ResizeDirection, Window, WindowBuilder};
 #[cfg(windows)]
 use wry::WebViewBuilderExtWindows;
 use wry::http::{Request, Response};
 use wry::{NewWindowResponse, PageLoadEvent, Rect, WebContext, WebViewBuilder};
 
+use crate::links::Inbox;
+use crate::media;
 use crate::placement::{self, MIN_SIZE, Placement, SETTLE};
 use crate::updates::Updater;
 use crate::{
@@ -116,6 +119,17 @@ pub fn run(app: App) {
     } = app;
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
+    let inbox = Rc::new(RefCell::new(Inbox::default()));
+    if let Some(link) = args.link.clone() {
+        inbox.borrow_mut().receive(link);
+    }
+    #[cfg(windows)]
+    platform::listen_links(&data_dir, {
+        let proxy = proxy.clone();
+        move |link| {
+            let _ = proxy.send_event(UserEvent::Link(link));
+        }
+    });
     #[cfg(target_os = "macos")]
     let _menu = platform::install_menu({
         let proxy = proxy.clone();
@@ -140,8 +154,10 @@ pub fn run(app: App) {
         .with_titlebar_transparent(true)
         .with_title_hidden(true)
         .with_fullsize_content_view(true);
+    // tao shows a visible window at its restored size before maximizing it.
     #[cfg(windows)]
     let builder = builder
+        .with_visible(false)
         .with_decorations(false)
         .with_undecorated_shadow(true)
         .with_window_classname(platform::WINDOW_CLASS)
@@ -166,6 +182,22 @@ pub fn run(app: App) {
             let _ = proxy.send_event(UserEvent::Emit(receive_script(&message)));
         }
     }));
+    let keys = {
+        let proxy = proxy.clone();
+        move |key| {
+            let _ = proxy.send_event(UserEvent::Emit(receive_script(&Outbound::MediaKey { key })));
+        }
+    };
+    #[cfg(windows)]
+    media::start(window.hwnd(), keys);
+    #[cfg(target_os = "macos")]
+    media::start(keys);
+    discord::start({
+        let proxy = proxy.clone();
+        move |message: Outbound| {
+            let _ = proxy.send_event(UserEvent::Emit(receive_script(&message)));
+        }
+    });
 
     let mut context = WebContext::new(Some(data_dir.join(platform::WEB_DATA_DIR)));
     let builder = WebViewBuilder::new_with_web_context(&mut context)
@@ -213,11 +245,14 @@ pub fn run(app: App) {
             NewWindowResponse::Deny
         })
         .with_on_page_load_handler({
-            let player = player.clone();
+            let (player, inbox) = (player.clone(), inbox.clone());
             move |event, _| {
-                // A new page never owns the video the last one started.
-                if let (PageLoadEvent::Started, Some(p)) = (event, player.borrow().as_ref()) {
-                    p.stop();
+                if let PageLoadEvent::Started = event {
+                    inbox.borrow_mut().page_loading();
+                    // A new page never owns the video the last one started.
+                    if let Some(p) = player.borrow().as_ref() {
+                        p.stop();
+                    }
                 }
             }
         })
@@ -237,6 +272,11 @@ pub fn run(app: App) {
     let webview = builder.build_as_child(&window);
     let webview =
         webview.unwrap_or_else(|e| platform::fatal(&format!("could not start the web view: {e}")));
+    #[cfg(windows)]
+    window.set_visible(true);
+    // Showing the window maximizes it.
+    let size = window.inner_size();
+    let _ = webview.set_bounds(page_bounds(size));
     video.resize(size.width, size.height);
 
     let mut fullscreen = false;
@@ -323,6 +363,24 @@ pub fn run(app: App) {
             #[cfg(target_os = "macos")]
             Event::UserEvent(UserEvent::WindowButtons(visible)) => {
                 platform::set_window_buttons(&window, visible)
+            }
+            #[cfg(target_os = "macos")]
+            Event::Opened { urls } => {
+                for link in urls.iter().filter_map(|u| crate::links::accept(u.as_str())) {
+                    if let Some(link) = inbox.borrow_mut().receive(link) {
+                        emit(Outbound::Link { url: link });
+                    }
+                }
+            }
+            Event::UserEvent(UserEvent::Link(link)) => {
+                if let Some(link) = inbox.borrow_mut().receive(link) {
+                    emit(Outbound::Link { url: link });
+                }
+            }
+            Event::UserEvent(UserEvent::LinksReady) => {
+                for link in inbox.borrow_mut().ready() {
+                    emit(Outbound::Link { url: link });
+                }
             }
             Event::UserEvent(UserEvent::Sync) => {
                 if let Some(p) = player.borrow().as_ref() {

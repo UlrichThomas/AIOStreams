@@ -1,14 +1,17 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void};
+use std::io::{Read, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use aiostreams_desktop_core::mpv::Mpv;
 use aiostreams_desktop_core::render::{NativeDisplay, RenderContext};
-use gtk4::glib;
 use gtk4::prelude::*;
+use gtk4::{gio, glib};
 use libloading::Library;
 
 /// Custom protocols are served from `<scheme>://localhost` on Linux.
@@ -19,13 +22,50 @@ pub const WEB_DATA_DIR: &str = "WebKit";
 /// Held for as long as the app runs.
 pub struct SingleInstance(#[allow(dead_code)] Option<std::fs::File>);
 
-/// One copy per data folder, whose web storage two copies cannot share.
-pub fn claim_instance(data_dir: &Path) -> Option<SingleInstance> {
+/// One copy per data folder, whose web storage two copies cannot share: a
+/// second launch hands its link over and gets None.
+pub fn claim_instance(data_dir: &Path, link: Option<&str>) -> Option<SingleInstance> {
     let _ = std::fs::create_dir_all(data_dir);
     let Ok(file) = std::fs::File::create(data_dir.join("instance.lock")) else {
         return Some(SingleInstance(None));
     };
-    file.try_lock().ok().map(|()| SingleInstance(Some(file)))
+    let claimed = file.try_lock().ok().map(|()| SingleInstance(Some(file)));
+    if claimed.is_none()
+        && let Some(link) = link
+    {
+        match UnixStream::connect(links_socket(data_dir)) {
+            Ok(mut stream) => {
+                let _ = stream.write_all(link.as_bytes());
+            }
+            Err(e) => log::warn!("links: could not reach the running copy: {e}"),
+        }
+    }
+    claimed
+}
+
+fn links_socket(data_dir: &Path) -> PathBuf {
+    data_dir.join("links.sock")
+}
+
+pub fn listen_links(data_dir: &Path, deliver: impl Fn(String) + Send + 'static) {
+    let path = links_socket(data_dir);
+    // Left by a copy that crashed: the instance lock says no other copy runs.
+    let _ = std::fs::remove_file(&path);
+    let listener = match UnixListener::bind(&path) {
+        Ok(listener) => listener,
+        Err(e) => return log::warn!("links: could not listen: {e}"),
+    };
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+            let mut text = String::new();
+            if (&stream).take(16 * 1024).read_to_string(&mut text).is_ok()
+                && let Some(link) = crate::links::accept(&text)
+            {
+                deliver(link);
+            }
+        }
+    });
 }
 
 type ProcFn = unsafe extern "C" fn(*const c_char) -> *mut c_void;
@@ -270,6 +310,52 @@ pub fn clear_video() {
 
 pub fn mpv_options(_video: &VideoSurface) -> Vec<(&'static str, String)> {
     vec![("vo", "libmpv".into()), ("hwdec", "auto-safe".into())]
+}
+
+const INHIBIT_IDLE: u32 = 8;
+
+/// The portal's handle for the running inhibition, which closing ends.
+static AWAKE: Mutex<Option<String>> = Mutex::new(None);
+
+pub fn keep_awake(on: bool) {
+    let Ok(mut held) = AWAKE.lock() else { return };
+    if on == held.is_some() {
+        return;
+    }
+    let result =
+        gio::bus_get_sync(gio::BusType::Session, None::<&gio::Cancellable>).and_then(|bus| {
+            let call = |path: &str, interface, method, args: Option<glib::Variant>| {
+                bus.call_sync(
+                    Some("org.freedesktop.portal.Desktop"),
+                    path,
+                    interface,
+                    method,
+                    args.as_ref(),
+                    None,
+                    gio::DBusCallFlags::NONE,
+                    2000,
+                    None::<&gio::Cancellable>,
+                )
+            };
+            match held.take() {
+                Some(handle) => call(&handle, "org.freedesktop.portal.Request", "Close", None),
+                None => {
+                    let args =
+                        ("", INHIBIT_IDLE, HashMap::<String, glib::Variant>::new()).to_variant();
+                    let reply = call(
+                        "/org/freedesktop/portal/desktop",
+                        "org.freedesktop.portal.Inhibit",
+                        "Inhibit",
+                        Some(args),
+                    )?;
+                    *held = reply.child_value(0).str().map(String::from);
+                    Ok(reply)
+                }
+            }
+        });
+    if let Err(e) = result {
+        log::warn!("keep awake: {e}");
+    }
 }
 
 pub fn open_external(url: &str) {

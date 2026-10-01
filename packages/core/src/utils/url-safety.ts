@@ -1,5 +1,3 @@
-import { lookup } from 'dns/promises';
-
 function parseIpv4(host: string): number | null {
   const parts = host.split('.');
   if (parts.length !== 4) return null;
@@ -69,19 +67,14 @@ function isBlockedIpv6(host: string): boolean {
   );
 }
 
-function hostnameOf(rawUrl: string): string | null {
-  try {
-    return new URL(rawUrl).hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  } catch {
-    return null;
-  }
+export function isBlockedAddress(address: string): boolean {
+  const host = address.replace(/^\[|\]$/g, '').toLowerCase();
+  return host.includes(':') ? isBlockedIpv6(host) : isBlockedIpv4(host);
 }
 
 /**
- * Guard for operator-supplied list URLs, applied to the configured URL and
- * to every redirect hop: http(s) only and no loopback, private, link-local
- * or CGNAT targets. Only the literal host is inspected; use
- * `isUnsafeRemoteUrlResolved` when the URL comes from an end user.
+ * http(s) only and no loopback, private, link-local or CGNAT targets. Only the
+ * literal host is inspected.
  */
 export function isUnsafeRemoteUrl(rawUrl: string): boolean {
   let url: URL;
@@ -97,29 +90,4 @@ export function isUnsafeRemoteUrl(rawUrl: string): boolean {
   if (host === 'localhost' || host.endsWith('.localhost')) return true;
   if (host.includes(':')) return isBlockedIpv6(host);
   return isBlockedIpv4(host);
-}
-
-/**
- * Every address the name resolves to must be public.
- */
-export async function isUnsafeRemoteUrlResolved(
-  rawUrl: string
-): Promise<boolean> {
-  if (isUnsafeRemoteUrl(rawUrl)) return true;
-
-  const host = hostnameOf(rawUrl);
-  if (!host) return true;
-  if (host.includes(':') || parseIpv4(host) !== null) return false;
-
-  let addresses: Array<{ address: string; family: number }>;
-  try {
-    addresses = await lookup(host, { all: true });
-  } catch {
-    return true;
-  }
-  if (addresses.length === 0) return true;
-
-  return addresses.some(({ address, family }) =>
-    family === 6 ? isBlockedIpv6(address.toLowerCase()) : isBlockedIpv4(address)
-  );
 }

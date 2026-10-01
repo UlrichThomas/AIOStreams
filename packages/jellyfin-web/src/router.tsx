@@ -6,9 +6,8 @@ import {
   createRouter,
   Outlet,
 } from '@tanstack/react-router';
-import { PageBody, WebLayout } from './components/layout';
+import { PageMessage, WebLayout } from './components/layout';
 import { navigate, setNavigator, to } from './lib/paths';
-import { handleAndroidBack } from './lib/hosts/jellyfin-android';
 import { lastCatalog } from './lib/settings';
 import { HomePage } from './pages/home';
 import { DiscoverIndex, DiscoverPage } from './pages/discover';
@@ -219,8 +218,8 @@ const routeTree = rootRoute.addChildren([
 
 function NotFoundPage(): React.ReactElement {
   return (
-    <PageBody>
-      <LuffyError title="There is nothing here">
+    <PageMessage>
+      <LuffyError title="There is nothing here" className="mt-0">
         <p className="text-sm text-[--muted]">
           The link may be old, or the page moved.
         </p>
@@ -232,7 +231,7 @@ function NotFoundPage(): React.ReactElement {
           Go home
         </Button>
       </LuffyError>
-    </PageBody>
+    </PageMessage>
   );
 }
 
@@ -260,5 +259,3 @@ document.addEventListener('click', (e) => {
   e.preventDefault();
   navigate(anchor.getAttribute('href')!.slice(1));
 });
-
-handleAndroidBack(webRouter.history);
