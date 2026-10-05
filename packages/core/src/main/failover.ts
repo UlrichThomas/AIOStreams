@@ -305,6 +305,8 @@ export interface RunPlayChainConfig {
  * How one attempt ended, as of the moment the chain settled:
  * - `ok`: resolved to a ready URL (the winner, or a result that lost to it).
  * - `failed`: threw a failover-retryable error (the source itself didn't work).
+ * - `unavailable`: threw a retryable error that reflects the service or the
+ *   network (5xx, timeout, connection limit), so says nothing of the source.
  * - `error`: threw a terminal error (account/service state, not the source).
  * - `downloading`: resolved as still downloading.
  * - `aborted`: still in flight when another attempt won; never a loss.
@@ -313,6 +315,7 @@ export interface RunPlayChainConfig {
 export type FailoverAttemptOutcome =
   | 'ok'
   | 'failed'
+  | 'unavailable'
   | 'error'
   | 'downloading'
   | 'aborted'
@@ -331,8 +334,29 @@ export interface RunPlayChainResult {
   outcomes: FailoverAttemptOutcome[];
 }
 
+/** Retryable codes raised by the service or the network, not the source. */
+const SERVICE_SIDE_CODES = new Set([
+  'BAD_GATEWAY',
+  'INTERNAL_SERVER_ERROR',
+  'SERVICE_UNAVAILABLE',
+  'TIMEOUT',
+  'TOO_MANY_ACTIVE_CONNECTIONS',
+  'PROXY_AUTHENTICATION_REQUIRED',
+]);
+
+function isServiceSideError(err: Error): boolean {
+  const code = (err as any)?.code;
+  if (typeof code === 'string') {
+    if (SERVICE_SIDE_CODES.has(code)) return true;
+    // Node / undici network failures (ECONNRESET, ETIMEDOUT, UND_ERR_*, …).
+    if (/^(E[A-Z]+|UND_ERR_\w+)$/.test(code)) return true;
+  }
+  return err?.name === 'AbortError' || err?.name === 'TimeoutError';
+}
+
 function errorOutcome(err: Error): FailoverAttemptOutcome {
-  return isFailoverRetryableError(err) ? 'failed' : 'error';
+  if (!isFailoverRetryableError(err)) return 'error';
+  return isServiceSideError(err) ? 'unavailable' : 'failed';
 }
 
 /**
@@ -408,8 +432,8 @@ function runParallel(
     const errors: Error[] = [];
     const succeeded = new Set<number>();
     const failed = new Set<number>();
-    // Subset of `failed` whose error was terminal rather than retryable.
-    const terminal = new Set<number>();
+    // How each index in `failed` failed (failed / unavailable / error).
+    const failedAs = new Map<number, FailoverAttemptOutcome>();
     // Indices whose resolve settled as "still downloading" (undefined url). These
     // are not real wins, but are remembered so we report "downloading" over an error
     // if nothing ready arrives. They count as settled for hasLowerPending().
@@ -426,15 +450,13 @@ function runParallel(
       attempts.map((_, i) =>
         succeeded.has(i)
           ? 'ok'
-          : terminal.has(i)
-            ? 'error'
-            : failed.has(i)
-              ? 'failed'
-              : downloading.has(i)
-                ? 'downloading'
-                : i < launched
-                  ? 'aborted'
-                  : 'not_run'
+          : failed.has(i)
+            ? (failedAs.get(i) ?? 'failed')
+            : downloading.has(i)
+              ? 'downloading'
+              : i < launched
+                ? 'aborted'
+                : 'not_run'
       );
     let launched = 0; // indices [0, launched) have been started (sequential)
     let active = 0;
@@ -590,7 +612,7 @@ function runParallel(
         (err: Error) => {
           active--;
           failed.add(i);
-          if (!isFailoverRetryableError(err)) terminal.add(i);
+          failedAs.set(i, errorOutcome(err));
           errors.push(err);
           logger.warn(
             { attempt: i, label: attempts[i]?.label, err },
