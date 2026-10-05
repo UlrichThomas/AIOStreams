@@ -56,6 +56,27 @@ describe('runPlayChain outcomes', () => {
     assert.deepEqual(r.outcomes, ['error', 'not_run']);
   });
 
+  it('a service-side error is not a source failure', async () => {
+    for (const parallel of [1, 3]) {
+      const r = await runPlayChain(
+        [
+          { resolve: fail('SERVICE_UNAVAILABLE'), rank: 0 },
+          { resolve: fail('ECONNRESET'), rank: 0 },
+          { resolve: fail('DOWNLOAD_FAILED'), rank: 0 },
+          { resolve: ok('u1', 20), rank: 0 },
+        ],
+        { ...cfg, parallel }
+      );
+      assert.equal(r.winnerIndex, 3);
+      assert.deepEqual(r.outcomes, [
+        'unavailable',
+        'unavailable',
+        'failed',
+        'ok',
+      ]);
+    }
+  });
+
   it('parallel: attempts still in flight when another wins are aborted', async () => {
     const r = await runPlayChain(
       [

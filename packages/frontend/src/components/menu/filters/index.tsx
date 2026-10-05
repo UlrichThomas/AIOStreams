@@ -3945,7 +3945,7 @@ function Content() {
                     </SettingsCard>
                     <TextInputs
                       label="Usenet Indexer Order"
-                      help="Preferred indexers, top first, for Usenet duplicates that service, tiebreaker and addon order leave tied. This is the case when several indexers sit behind one NZBHydra2, Prowlarr or Newznab addon. Names match the indexer shown on streams and on the Usenet dashboard, ignoring case. Indexers not listed come after these, alphabetically. Set the Usenet Age Tiebreaker to After Addon Order if you want addon order to decide before post age."
+                      help="Preferred indexers, top first, for Usenet duplicates that service, tiebreaker and addon order leave tied. This is the case when several indexers sit behind one NZBHydra2, Prowlarr or Newznab addon. Names match the indexer shown on streams and on the Usenet dashboard, ignoring case. Indexers not listed come after these, alphabetically. Left empty, the addon's own result order decides, as before. Set the Usenet Age Tiebreaker to After Addon Order if you want addon order to decide before post age."
                       itemName="Indexer"
                       values={userData.deduplicator?.indexerOrder ?? []}
                       onValuesChange={(values) => {

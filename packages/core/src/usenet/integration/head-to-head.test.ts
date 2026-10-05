@@ -62,6 +62,26 @@ describe('headToHeadRescues', () => {
     );
   });
 
+  it('skips unavailable attempts and copies on another service', () => {
+    const on = (indexer: string, serviceId: string): HeadToHeadAttempt => ({
+      ...usenet(0, indexer),
+      serviceId,
+    });
+    assert.deepEqual(
+      headToHeadRescues(
+        [
+          on('A', 'torbox'),
+          on('B', 'nzbdav'),
+          on('C', 'torbox'),
+          on('D', 'torbox'),
+        ],
+        ['failed', 'failed', 'unavailable', 'ok'],
+        3
+      ),
+      [{ winner: 'D', loser: 'A', rescues: 1 }]
+    );
+  });
+
   it('skips a failed copy from the winning indexer itself', () => {
     assert.deepEqual(
       headToHeadRescues([usenet(0, 'A'), usenet(0, 'A')], ['failed', 'ok'], 1),
