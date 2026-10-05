@@ -614,12 +614,17 @@ export async function getUsenetStatsOverview(
     if (!cells) qualityByIndexer.set(indexer, (cells = []));
     cells.push(cell);
   }
-  // Quality rows record even when nothing else does (e.g. a lone indexer
-  // behind an external addon), so those indexers still need a row.
+  // Quality and head-to-head rows record even when nothing else does (e.g. a
+  // lone indexer behind an external addon, or grabs labelled by NZB host), so
+  // those indexers still need a row.
   const summaryIndexers = new Set(indexerSummary.map((a) => a.indexer));
+  const extraIndexers = new Set([
+    ...qualityByIndexer.keys(),
+    ...headToHead.flatMap((r) => [r.winner, r.loser]),
+  ]);
   const rollups = [
     ...indexerSummary,
-    ...[...qualityByIndexer.keys()]
+    ...[...extraIndexers]
       .filter((indexer) => !summaryIndexers.has(indexer))
       .map(emptyIndexerRollup),
   ];

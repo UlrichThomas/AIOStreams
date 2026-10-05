@@ -14,14 +14,18 @@ export interface HeadToHeadAttempt {
   /** Failover rank; same-release variants share their release's rank. */
   rank: number;
   indexer?: string;
+  /** Service the attempt resolves through; copies on another service differ by more than indexer. */
+  serviceId?: string;
 }
 
 /**
  * Same-release rescues from one settled play chain: every usenet attempt that
  * shares the winner's rank (a copy of the same release) and failed counts as
- * a rescue of its indexer by the winner's. Aborted, terminal-error and
- * unlaunched attempts never count, nor do attempts with no named indexer or
- * the winner's own indexer.
+ * a rescue of its indexer by the winner's. Only `failed` counts: aborted,
+ * unlaunched, terminal-error and service-side (`unavailable`) attempts say
+ * nothing about the NZB. Nor do attempts with no named indexer, the winner's
+ * own indexer, or a different service than the winner (the service, not the
+ * indexer, may be what differed).
  */
 export function headToHeadRescues(
   attempts: readonly HeadToHeadAttempt[],
@@ -36,6 +40,8 @@ export function headToHeadRescues(
   attempts.forEach((a, i) => {
     if (i === winnerIndex || outcomes[i] !== 'failed') return;
     if (a.type !== 'usenet' || a.rank !== winner.rank || !a.indexer?.trim())
+      return;
+    if (a.serviceId && winner.serviceId && a.serviceId !== winner.serviceId)
       return;
     const loser = indexerLabelFor(a.indexer);
     if (loser === winnerLabel) return;
