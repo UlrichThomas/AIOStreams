@@ -345,6 +345,9 @@ const SERVICE_SIDE_CODES = new Set([
 ]);
 
 function isServiceSideError(err: Error): boolean {
+  // Some source failures borrow a service-side code (e.g. an indexer's .nzb
+  // download failing as BAD_GATEWAY); their throw sites mark them.
+  if ((err as DebridError)?.sourceFailure) return false;
   const code = (err as any)?.code;
   if (typeof code === 'string') {
     if (SERVICE_SIDE_CODES.has(code)) return true;

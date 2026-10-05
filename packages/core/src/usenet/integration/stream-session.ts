@@ -1,7 +1,7 @@
 import { Readable } from 'node:stream';
 import { createHash } from 'node:crypto';
 import { createLogger } from '../../logging/logger.js';
-import { DebridError } from '../../debrid/base.js';
+import { asSourceFailure, DebridError } from '../../debrid/base.js';
 import {
   ArticleNotFoundError,
   NotStreamableError,
@@ -714,16 +714,18 @@ export async function openUsenetStream(
 
   const sessionKey = streamSessionKey(decoded);
   if (isStreamFailing(sessionKey)) {
-    throw new DebridError(
-      'this release is currently unstreamable (data missing on every provider)',
-      {
-        statusCode: 503,
-        statusText: 'Service Unavailable',
-        code: 'SERVICE_UNAVAILABLE',
-        headers: {},
-        body: null,
-        type: 'api_error',
-      }
+    throw asSourceFailure(
+      new DebridError(
+        'this release is currently unstreamable (data missing on every provider)',
+        {
+          statusCode: 503,
+          statusText: 'Service Unavailable',
+          code: 'SERVICE_UNAVAILABLE',
+          headers: {},
+          body: null,
+          type: 'api_error',
+        }
+      )
     );
   }
 

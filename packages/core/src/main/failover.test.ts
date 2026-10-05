@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 // Use the normal core entry point to initialise the dependency graph.
 import '../index.js';
 import { runPlayChain, type FailoverAttempt } from './failover.js';
+import { asSourceFailure, DebridError } from '../debrid/base.js';
 
 const ok =
   (url: string, delayMs = 0): FailoverAttempt['resolve'] =>
@@ -75,6 +76,30 @@ describe('runPlayChain outcomes', () => {
         'ok',
       ]);
     }
+  });
+
+  it('a source failure with a service-side code still counts', async () => {
+    const r = await runPlayChain(
+      [
+        {
+          resolve: () =>
+            Promise.reject(
+              asSourceFailure(
+                new DebridError('failed to fetch nzb', {
+                  statusCode: 502,
+                  statusText: 'Bad Gateway',
+                  code: 'BAD_GATEWAY',
+                  headers: {},
+                })
+              )
+            ),
+          rank: 0,
+        },
+        { resolve: ok('u1'), rank: 0 },
+      ],
+      { ...cfg, parallel: 1 }
+    );
+    assert.deepEqual(r.outcomes, ['failed', 'ok']);
   });
 
   it('parallel: attempts still in flight when another wins are aborted', async () => {
