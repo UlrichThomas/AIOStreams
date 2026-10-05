@@ -477,7 +477,28 @@ class StreamDeduplicator {
       return aTypeIndex - bTypeIndex;
     }
 
-    return 0;
+    return this.compareByIndexer(a, b);
+  }
+
+  /**
+   * Last resort for usenet duplicates the addon order can't split, e.g. several
+   * indexers behind one NZBHydra2 / Prowlarr addon: the user's indexer order,
+   * then indexer name so the winner never depends on response order.
+   */
+  private compareByIndexer(a: ParsedStream, b: ParsedStream): number {
+    if (a.type !== 'usenet' || b.type !== 'usenet') return 0;
+    const ai = a.indexer?.trim().toLowerCase();
+    const bi = b.indexer?.trim().toLowerCase();
+    if (!ai || !bi || ai === bi) return 0;
+    const order = (this.userData.deduplicator?.indexerOrder ?? []).map((n) =>
+      n.trim().toLowerCase()
+    );
+    let aIndex = order.indexOf(ai);
+    let bIndex = order.indexOf(bi);
+    aIndex = aIndex === -1 ? Infinity : aIndex;
+    bIndex = bIndex === -1 ? Infinity : bIndex;
+    if (aIndex !== bIndex) return aIndex - bIndex;
+    return ai < bi ? -1 : 1;
   }
 
   /**
@@ -529,6 +550,7 @@ class StreamDeduplicator {
             identity: other.nzbUrl ?? other.torrent?.infoHash ?? other.url,
             kind: 'owned',
             proxied: shouldProxyStream(other, this.userData.proxy),
+            indexer: other.indexer,
           };
         } else if (includeExternal && isExternalDebridFailover(other)) {
           let identity = other.url;

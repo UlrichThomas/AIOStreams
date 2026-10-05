@@ -424,6 +424,9 @@ const DeduplicatorOptions = z.object({
       })
     )
     .optional(),
+  // Usenet indexers in preference order, for duplicates the addon order can't
+  // split (several indexers behind one NZBHydra2 / Prowlarr / Newznab addon).
+  indexerOrder: z.array(z.string()).optional(),
   merge: z
     .object({
       enabled: z.boolean().optional(),
@@ -1544,6 +1547,7 @@ export const ParsedStreamSchema = z.object({
         identity: z.string().optional(), // nzbUrl | infoHash | external host+path
         kind: z.enum(['owned', 'external']).optional(), // default 'owned'
         proxied: z.boolean().optional(), // computed at merge time
+        indexer: z.string().optional(), // usenet: source indexer, for head-to-head stats
       })
     )
     .optional(),

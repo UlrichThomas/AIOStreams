@@ -77,4 +77,5 @@ export type {
   FailoverAttempt,
   RunPlayChainConfig,
   RunPlayChainResult,
+  FailoverAttemptOutcome,
 } from './main/failover.js';

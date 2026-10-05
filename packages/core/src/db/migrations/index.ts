@@ -43,6 +43,7 @@ import { watchAirTimes } from './0042_watch_air_times.js';
 import { usenetIndexerSearch } from './1001_usenet_indexer_search.js';
 import { usenetIndexerUniqueness } from './1002_usenet_indexer_uniqueness.js';
 import { usenetIndexerQuality } from './1003_usenet_indexer_quality.js';
+import { usenetIndexerHeadToHead } from './1004_usenet_indexer_head_to_head.js';
 import type { Migration } from './types.js';
 
 export const MIGRATIONS: readonly Migration[] = [
@@ -90,10 +91,11 @@ export const MIGRATIONS: readonly Migration[] = [
   watchAirTimes,
   // Fork-only migrations use ids from 1001 up, clear of upstream's
   // sequential ids, so merging upstream never reuses one. Add the next
-  // fork migration as 1004, and keep these after every upstream entry.
+  // fork migration as 1005, and keep these after every upstream entry.
   usenetIndexerSearch,
   usenetIndexerUniqueness,
   usenetIndexerQuality,
+  usenetIndexerHeadToHead,
 ];
 
 /**

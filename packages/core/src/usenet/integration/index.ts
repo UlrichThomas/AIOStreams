@@ -16,3 +16,4 @@ export * from './verify-content.js';
 export * from './sabnzbd-ids.js';
 export * from './arr-bridge.js';
 export * from './categories.js';
+export * from './head-to-head.js';

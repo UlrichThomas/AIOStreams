@@ -20,6 +20,7 @@ import {
   type ProviderState,
   type UsenetProviderStatRow,
   type UsenetIndexerStatRow,
+  type UsenetIndexerHeadToHeadRow,
   type UsenetIndexerQualityCell,
   type UsenetStatsOverview,
 } from './queries';
@@ -898,6 +899,159 @@ function IndexerTable({
   );
 }
 
+/** Below this many attributable grabs the server leaves an indexer unranked. */
+const MIN_RANK_GRABS = 10;
+
+/**
+ * Suggested preference order, for comparing against the addon order. Advice
+ * only: nothing re-ranks streams from it.
+ */
+function IndexerPreferenceTable({
+  indexers,
+  headToHead,
+}: {
+  indexers: UsenetIndexerStatRow[];
+  headToHead: UsenetIndexerHeadToHeadRow[];
+}) {
+  const rows = indexers
+    .filter((i) => i.grabs > 0 || i.rescuedOthers > 0 || i.wasRescued > 0)
+    .sort(
+      (a, b) =>
+        (a.suggestedRank ?? Infinity) - (b.suggestedRank ?? Infinity) ||
+        b.grabs - a.grabs
+    );
+  if (rows.length === 0) {
+    return (
+      <p className="text-sm text-[--muted]">
+        No grabs recorded in this window yet.
+      </p>
+    );
+  }
+  // Each unordered pair once, the side with more rescues first.
+  const pairs = new Map<
+    string,
+    { a: string; b: string; aOverB: number; bOverA: number }
+  >();
+  for (const r of headToHead) {
+    const [a, b] =
+      r.winner < r.loser ? [r.winner, r.loser] : [r.loser, r.winner];
+    const key = `${a}\0${b}`;
+    const pair = pairs.get(key) ?? { a, b, aOverB: 0, bOverA: 0 };
+    if (r.winner === a) pair.aOverB += r.rescues;
+    else pair.bOverA += r.rescues;
+    pairs.set(key, pair);
+  }
+  const pairRows = [...pairs.values()]
+    .map((p) =>
+      p.aOverB >= p.bOverA
+        ? { top: p.a, other: p.b, topWins: p.aOverB, otherWins: p.bOverA }
+        : { top: p.b, other: p.a, topWins: p.bOverA, otherWins: p.aOverB }
+    )
+    .sort((x, y) => y.topWins + y.otherWins - (x.topWins + x.otherWins));
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-[--muted]">
+        A suggested order for your Usenet addons (or the dedup Usenet Indexer
+        Order), best first. Nothing is reordered automatically. Indexers with
+        fewer than {MIN_RANK_GRABS} grabs in this window aren't ranked.
+      </p>
+      <div className="overflow-x-auto -mx-4 px-4 lg:mx-0 lg:px-0">
+        <table className="w-full text-sm min-w-[640px]">
+          <thead className="text-[--muted] text-xs uppercase">
+            <tr className="text-left border-b border-[--border]">
+              <th className="py-2 pr-3 w-12">#</th>
+              <th className="py-2 px-3">Indexer</th>
+              <th
+                className="py-2 px-3 text-right"
+                title="The lowest grab success rate the data supports with 95% confidence (Wilson lower bound), so a few lucky grabs can't beat a long record. Auth and rate-limit .nzb fetch failures are left out; missing articles count. Plus up to 0.1 for the share of releases no other indexer returned."
+              >
+                Score
+              </th>
+              <th className="py-2 px-3 text-right">Grabs</th>
+              <th className="py-2 px-3 text-right">Success</th>
+              <th
+                className="py-2 px-3 text-right"
+                title="Same-release failover: times another indexer's NZB failed and this indexer's copy of the release then played. Breaks near-ties in the suggested order."
+              >
+                Rescued others
+              </th>
+              <th
+                className="py-2 pl-3 text-right"
+                title="Same-release failover: times this indexer's NZB failed and another indexer's copy of the release then played."
+              >
+                Was rescued
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((i) => (
+              <tr key={i.indexer} className="border-b border-[--border]/50">
+                <td className="py-2 pr-3 tabular-nums font-semibold">
+                  {i.suggestedRank ?? (
+                    <span
+                      className="text-[--muted] font-normal"
+                      title={`Not enough grabs to rank (needs ${MIN_RANK_GRABS})`}
+                    >
+                      —
+                    </span>
+                  )}
+                </td>
+                <td className="py-2 px-3 font-medium">{i.indexer}</td>
+                <td className="py-2 px-3 text-right tabular-nums">
+                  {i.rankScore == null ? '—' : i.rankScore.toFixed(3)}
+                </td>
+                <td className="py-2 px-3 text-right tabular-nums">
+                  {formatCompact(i.grabs)}
+                </td>
+                <td
+                  className={cn(
+                    'py-2 px-3 text-right tabular-nums',
+                    i.grabs > 0 && 1 - i.successRate > 0.1 && 'text-red-400'
+                  )}
+                >
+                  {i.grabs > 0 ? formatPercent(i.successRate) : '—'}
+                </td>
+                <td className="py-2 px-3 text-right tabular-nums">
+                  {i.rescuedOthers > 0 ? formatCompact(i.rescuedOthers) : '—'}
+                </td>
+                <td
+                  className={cn(
+                    'py-2 pl-3 text-right tabular-nums',
+                    i.wasRescued > i.rescuedOthers && 'text-red-400'
+                  )}
+                >
+                  {i.wasRescued > 0 ? formatCompact(i.wasRescued) : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {pairRows.length > 0 && (
+        <div>
+          <h4 className="text-xs font-semibold uppercase text-[--muted] mb-2">
+            Head-to-head
+          </h4>
+          <ul className="space-y-1 text-sm">
+            {pairRows.map((r) => (
+              <li key={`${r.top}\0${r.other}`} className="tabular-nums">
+                <span className="font-medium">{r.top}</span> rescued{' '}
+                <span className="font-medium">{r.other}</span> ×{r.topWins}
+                {r.otherWins > 0 && (
+                  <span className="text-[--muted]">
+                    {' '}
+                    · {r.other} rescued {r.top} ×{r.otherWins}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Sole-source share at which an indexer is flagged as hard to drop. */
 const SOLE_SOURCE_HIGHLIGHT = 0.1;
 
@@ -1319,7 +1473,7 @@ function StatsSection({
     .slice(0, 6)
     .map((i) => ({ name: i.indexer, value: i.grabs }));
   const [indexerView, setIndexerView] = React.useState<
-    'grabs' | 'searches' | 'quality'
+    'grabs' | 'searches' | 'quality' | 'preference'
   >('grabs');
   const grabIndexers = data.indexers.filter((i) => i.grabs > 0);
   const totalResults = data.indexers.reduce((s, i) => s + i.results, 0);
@@ -1345,7 +1499,7 @@ function StatsSection({
     .sort((a, b) => b.value - a.value)
     .slice(0, 6);
   const donut =
-    indexerView === 'grabs'
+    indexerView === 'grabs' || indexerView === 'preference'
       ? { data: grabShare, label: 'grabs', value: totalGrabs }
       : indexerView === 'searches'
         ? { data: resultsShare, label: 'results', value: totalResults }
@@ -1359,6 +1513,11 @@ function StatsSection({
       <IndexerTable indexers={grabIndexers} onReset={onReset} />
     ) : indexerView === 'searches' ? (
       <IndexerSearchTable indexers={data.indexers} onReset={onReset} />
+    ) : indexerView === 'preference' ? (
+      <IndexerPreferenceTable
+        indexers={data.indexers}
+        headToHead={data.headToHead ?? []}
+      />
     ) : (
       <IndexerQualityTable indexers={data.indexers} onReset={onReset} />
     );
@@ -1461,6 +1620,7 @@ function StatsSection({
                   { value: 'grabs', label: 'Grabs' },
                   { value: 'searches', label: 'Searches' },
                   { value: 'quality', label: 'Quality' },
+                  { value: 'preference', label: 'Preference' },
                 ] as const
               }
               value={indexerView}

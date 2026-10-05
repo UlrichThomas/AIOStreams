@@ -301,6 +301,23 @@ export interface RunPlayChainConfig {
   duplicateStaggerMs?: number;
 }
 
+/**
+ * How one attempt ended, as of the moment the chain settled:
+ * - `ok`: resolved to a ready URL (the winner, or a result that lost to it).
+ * - `failed`: threw a failover-retryable error (the source itself didn't work).
+ * - `error`: threw a terminal error (account/service state, not the source).
+ * - `downloading`: resolved as still downloading.
+ * - `aborted`: still in flight when another attempt won; never a loss.
+ * - `not_run`: never launched.
+ */
+export type FailoverAttemptOutcome =
+  | 'ok'
+  | 'failed'
+  | 'error'
+  | 'downloading'
+  | 'aborted'
+  | 'not_run';
+
 export interface RunPlayChainResult {
   url?: string;
   error?: Error;
@@ -308,6 +325,14 @@ export interface RunPlayChainResult {
   failedOver: boolean;
   /** If a URL is available, this is the label of the attempt that provided it. */
   label?: string;
+  /** Index into `attempts` of the attempt whose URL was returned. */
+  winnerIndex?: number;
+  /** One entry per attempt, indexed like `attempts`. */
+  outcomes: FailoverAttemptOutcome[];
+}
+
+function errorOutcome(err: Error): FailoverAttemptOutcome {
+  return isFailoverRetryableError(err) ? 'failed' : 'error';
 }
 
 /**
@@ -320,7 +345,7 @@ export async function runPlayChain(
   attempts: FailoverAttempt[],
   cfg: RunPlayChainConfig
 ): Promise<RunPlayChainResult> {
-  if (attempts.length === 0) return { failedOver: false };
+  if (attempts.length === 0) return { failedOver: false, outcomes: [] };
   if (cfg.parallel <= 1) return runSequential(attempts);
   return runParallel(attempts, cfg);
 }
@@ -331,17 +356,23 @@ async function runSequential(
   let sawDownloading = false;
   let lastError: Error | undefined;
   let tried = 0;
+  const outcomes: FailoverAttemptOutcome[] = attempts.map(() => 'not_run');
   for (let i = 0; i < attempts.length; i++) {
     tried++;
     try {
       const url = await attempts[i].resolve();
-      if (url)
+      if (url) {
+        outcomes[i] = 'ok';
         return {
           url,
           failedOver: i > 0,
           label: attempts[i]?.label ?? `attempt ${i}`,
+          winnerIndex: i,
+          outcomes,
         };
+      }
       // undefined = source still downloading.
+      outcomes[i] = 'downloading';
       sawDownloading = true;
       logger.warn(
         { attempt: i, label: attempts[i]?.label },
@@ -349,6 +380,7 @@ async function runSequential(
       );
     } catch (err: any) {
       lastError = err as Error;
+      outcomes[i] = errorOutcome(lastError);
       if (!isFailoverRetryableError(err)) break; // terminal for this service — stop
       logger.warn(
         { attempt: i, err, label: attempts[i]?.label },
@@ -362,8 +394,9 @@ async function runSequential(
       url: undefined,
       failedOver: tried > 1,
       label: attempts[tried - 1]?.label ?? `attempt ${tried - 1}`,
+      outcomes,
     };
-  return { error: lastError, failedOver: tried > 1 };
+  return { error: lastError, failedOver: tried > 1, outcomes };
 }
 
 function runParallel(
@@ -375,6 +408,8 @@ function runParallel(
     const errors: Error[] = [];
     const succeeded = new Set<number>();
     const failed = new Set<number>();
+    // Subset of `failed` whose error was terminal rather than retryable.
+    const terminal = new Set<number>();
     // Indices whose resolve settled as "still downloading" (undefined url). These
     // are not real wins, but are remembered so we report "downloading" over an error
     // if nothing ready arrives. They count as settled for hasLowerPending().
@@ -385,6 +420,22 @@ function runParallel(
     const labelOf = (idx: number): string =>
       attempts[idx]?.label ?? `attempt ${idx}`;
     const labelsOf = (set: Set<number>): string[] => [...set].map(labelOf);
+    // Taken as the chain settles, so the rejections of attempts aborted by the
+    // win never read as failures.
+    const snapshotOutcomes = (): FailoverAttemptOutcome[] =>
+      attempts.map((_, i) =>
+        succeeded.has(i)
+          ? 'ok'
+          : terminal.has(i)
+            ? 'error'
+            : failed.has(i)
+              ? 'failed'
+              : downloading.has(i)
+                ? 'downloading'
+                : i < launched
+                  ? 'aborted'
+                  : 'not_run'
+      );
     let launched = 0; // indices [0, launched) have been started (sequential)
     let active = 0;
     let staggerTimer: NodeJS.Timeout | undefined;
@@ -405,6 +456,7 @@ function runParallel(
       if (settled) return;
       settled = true;
       clearTimers();
+      const outcomes = snapshotOutcomes();
       for (let i = 0; i < controllers.length; i++) {
         if (i !== b.index) controllers[i]?.abort();
       }
@@ -418,6 +470,8 @@ function runParallel(
         url: b.url,
         failedOver: b.index > 0,
         label: attempts[b.index]?.label ?? `attempt ${b.index}`,
+        winnerIndex: b.index,
+        outcomes,
       });
     }
 
@@ -427,6 +481,7 @@ function runParallel(
       if (settled) return;
       settled = true;
       clearTimers();
+      const outcomes = snapshotOutcomes();
       for (const c of controllers) c?.abort();
       if (downloading.size > 0) {
         logger.warn(
@@ -440,6 +495,7 @@ function runParallel(
         resolve({
           url: undefined,
           failedOver: launched > 1,
+          outcomes,
         });
         return;
       }
@@ -451,7 +507,7 @@ function runParallel(
         },
         'all failover attempts failed'
       );
-      resolve({ error: pickError(errors), failedOver: launched > 1 });
+      resolve({ error: pickError(errors), failedOver: launched > 1, outcomes });
     }
 
     function onDeadline() {
@@ -534,6 +590,7 @@ function runParallel(
         (err: Error) => {
           active--;
           failed.add(i);
+          if (!isFailoverRetryableError(err)) terminal.add(i);
           errors.push(err);
           logger.warn(
             { attempt: i, label: attempts[i]?.label, err },

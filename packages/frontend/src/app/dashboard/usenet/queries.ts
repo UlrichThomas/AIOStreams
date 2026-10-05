@@ -151,6 +151,21 @@ export interface UsenetIndexerStatRow {
   soleRate: number | null;
   /** Distinct releases per request by resolution × quality (raw results). */
   qualityMix: UsenetIndexerQualityCell[];
+  /** Wilson lower bound of grab success plus a uniqueness bonus; null without enough grabs. */
+  rankScore: number | null;
+  /** Suggested addon order (1 = prefer); null when unranked. */
+  suggestedRank: number | null;
+  /** Times another indexer's NZB failed and this one's copy played. */
+  rescuedOthers: number;
+  /** Times this indexer's NZB failed and another's copy played. */
+  wasRescued: number;
+}
+
+/** Same-release failover rescues: `loser`'s NZB failed, `winner`'s played. */
+export interface UsenetIndexerHeadToHeadRow {
+  winner: string;
+  loser: string;
+  rescues: number;
 }
 
 export interface UsenetIndexerQualityCell {
@@ -178,6 +193,7 @@ export interface UsenetStatsOverview {
   };
   providers: UsenetProviderStatRow[];
   indexers: UsenetIndexerStatRow[];
+  headToHead: UsenetIndexerHeadToHeadRow[];
   throughput: UsenetThroughputPoint[];
   firstSeenAt?: number;
 }
