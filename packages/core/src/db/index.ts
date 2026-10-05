@@ -50,6 +50,7 @@ export {
   type UsenetIndexerLastError,
   type UsenetIndexerQualityDelta,
   type UsenetIndexerQualityRow,
+  type UsenetIndexerHeadToHeadRow,
 } from './repositories/usenet-indexer-metrics.js';
 export {
   StreamSessionRepository,

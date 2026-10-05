@@ -4,8 +4,10 @@ import {
   UsenetMetricsRepository,
   UsenetIndexerMetricsRepository,
   type UsenetIndexerRollup,
+  type UsenetIndexerHeadToHeadRow,
   type UsenetMetricDelta,
 } from '../../../db/index.js';
+import { indexerRankInput, suggestedRanks } from './indexer-rank.js';
 import {
   ProviderConfig,
   ProviderState,
@@ -126,6 +128,17 @@ export interface UsenetIndexerStatRow {
   soleRate: number | null;
   /** Distinct releases per request by resolution × quality (raw results). */
   qualityMix: UsenetIndexerQualityCell[];
+  /**
+   * Preference score: Wilson lower bound of grab success (auth/429 fetch
+   * failures excluded) plus a small uniqueness bonus. null without enough grabs.
+   */
+  rankScore: number | null;
+  /** Suggested addon order (1 = prefer); null when unranked. */
+  suggestedRank: number | null;
+  /** Times another indexer's NZB failed and this one's copy of the release played. */
+  rescuedOthers: number;
+  /** Times this indexer's NZB failed and another's copy of the release played. */
+  wasRescued: number;
 }
 
 export interface UsenetIndexerQualityCell {
@@ -169,6 +182,8 @@ export interface UsenetStatsOverview {
   };
   providers: UsenetProviderStatRow[];
   indexers: UsenetIndexerStatRow[];
+  /** Same-release failover rescues per (winner, loser) pair. */
+  headToHead: UsenetIndexerHeadToHeadRow[];
   throughput: UsenetThroughputPoint[];
   firstSeenAt?: number;
 }
@@ -492,6 +507,7 @@ export async function getUsenetStatsOverview(
     indexerErrors,
     indexerSearchErrors,
     indexerQuality,
+    headToHead,
   ] = await Promise.all([
     UsenetMetricsRepository.summaryByProvider(sinceMs),
     UsenetMetricsRepository.timeSeries(sinceMs, bucketMs),
@@ -500,6 +516,7 @@ export async function getUsenetStatsOverview(
     UsenetIndexerMetricsRepository.lastErrors(),
     UsenetIndexerMetricsRepository.lastSearchErrors(),
     UsenetIndexerMetricsRepository.qualityByIndexer(sinceMs),
+    UsenetIndexerMetricsRepository.headToHeadSince(sinceMs),
   ]);
   const summaryById = new Map(summary.map((s) => [s.providerId, s]));
 
@@ -606,6 +623,16 @@ export async function getUsenetStatsOverview(
       .filter((indexer) => !summaryIndexers.has(indexer))
       .map(emptyIndexerRollup),
   ];
+  const rankInputs = new Map(
+    rollups.map((agg) => [agg.indexer, indexerRankInput(agg)])
+  );
+  const ranks = suggestedRanks(rankInputs, headToHead);
+  const rescuedOthers = new Map<string, number>();
+  const wasRescued = new Map<string, number>();
+  for (const r of headToHead) {
+    rescuedOthers.set(r.winner, (rescuedOthers.get(r.winner) ?? 0) + r.rescues);
+    wasRescued.set(r.loser, (wasRescued.get(r.loser) ?? 0) + r.rescues);
+  }
   const indexers: UsenetIndexerStatRow[] = rollups
     .map((agg) => {
       const err = lastErrorByIndexer.get(agg.indexer);
@@ -669,6 +696,10 @@ export async function getUsenetStatsOverview(
           agg.uniqReleases > 0 ? agg.uniqUnique / agg.uniqReleases : null,
         soleRate: agg.uniqRequests > 0 ? agg.uniqSole / agg.uniqRequests : null,
         qualityMix: qualityByIndexer.get(agg.indexer) ?? [],
+        rankScore: rankInputs.get(agg.indexer)?.score ?? null,
+        suggestedRank: ranks.get(agg.indexer) ?? null,
+        rescuedOthers: rescuedOthers.get(agg.indexer) ?? 0,
+        wasRescued: wasRescued.get(agg.indexer) ?? 0,
       };
     })
     .sort(
@@ -700,6 +731,7 @@ export async function getUsenetStatsOverview(
     totals,
     providers,
     indexers,
+    headToHead,
     throughput,
     firstSeenAt,
   };
