@@ -9,6 +9,7 @@ import {
 import { getDataFolder } from '../../utils/general.js';
 import { createLogger } from '../../logging/logger.js';
 import {
+  asSourceFailure,
   DebridError,
   DebridDownload,
   DebridFile,
@@ -254,15 +255,17 @@ export async function fetchNzb(
     return await downloadManager.fetchNzb(url, { signal });
   } catch (err) {
     if (err instanceof NotAnNzbError) {
-      throw new DebridError(err.message, {
-        statusCode: 502,
-        statusText: 'Bad Gateway',
-        code: 'BAD_GATEWAY',
-        headers: {},
-        body: null,
-        type: 'upstream_error',
-        cause: err,
-      });
+      throw asSourceFailure(
+        new DebridError(err.message, {
+          statusCode: 502,
+          statusText: 'Bad Gateway',
+          code: 'BAD_GATEWAY',
+          headers: {},
+          body: null,
+          type: 'upstream_error',
+          cause: err,
+        })
+      );
     }
     if (err instanceof NzbTooLargeError) {
       throw new DebridError(err.message, {
@@ -275,7 +278,7 @@ export async function fetchNzb(
         cause: err,
       });
     }
-    throw new DebridError('failed to fetch nzb', {
+    const fetchErr = new DebridError('failed to fetch nzb', {
       statusCode: 502,
       statusText: 'Bad Gateway',
       code: 'BAD_GATEWAY',
@@ -284,6 +287,12 @@ export async function fetchNzb(
       type: 'upstream_error',
       cause: err,
     });
+    // The indexer answered with an error: its fault, unless it's the account
+    // (auth) or our request rate. No status means a transport failure.
+    const status = grabHttpStatus(err);
+    if (status !== undefined && ![401, 403, 429].includes(status))
+      asSourceFailure(fetchErr);
+    throw fetchErr;
   }
 }
 

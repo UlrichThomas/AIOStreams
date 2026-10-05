@@ -8,6 +8,7 @@ import {
   PlaybackInfo,
   DebridFile,
   DebridError,
+  asSourceFailure,
 } from './base.js';
 import {
   ServiceId,
@@ -192,14 +193,17 @@ export class AltmountService extends UsenetStreamService {
       const data = (await response.json()) as AltmountNativeStreamsResponse;
 
       if (!data.streams?.length) {
-        throw new DebridError('No streams returned from AltMount native API', {
-          statusCode: 500,
-          statusText: 'Internal Server Error',
-          code: 'INTERNAL_SERVER_ERROR',
-          headers: {},
-          body: null,
-          type: 'api_error',
-        });
+        // AltMount answered fine; the NZB just held nothing playable.
+        throw asSourceFailure(
+          new DebridError('No streams returned from AltMount native API', {
+            statusCode: 500,
+            statusText: 'Internal Server Error',
+            code: 'INTERNAL_SERVER_ERROR',
+            headers: {},
+            body: null,
+            type: 'api_error',
+          })
+        );
       }
 
       // Map AltMount streams to DebridFile so selectFileInTorrentOrNZB can
