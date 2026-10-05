@@ -80,6 +80,16 @@ export interface UsenetIndexerQualityDelta {
 /** One indexer's resolution × quality total over a window. */
 export type UsenetIndexerQualityRow = UsenetIndexerQualityDelta;
 
+/**
+ * Same-release failover rescues: `loser`'s NZB failed and `winner`'s copy of
+ * the same release then played.
+ */
+export interface UsenetIndexerHeadToHeadRow {
+  winner: string;
+  loser: string;
+  rescues: number;
+}
+
 /** Most recent grab-fetch error for an indexer (diagnostic, not windowed). */
 export interface UsenetIndexerLastError {
   indexer: string;
@@ -123,6 +133,16 @@ function hourFloor(ts: number): number {
 function scopeWhere(s: UsenetIndexerScope): SqlFragment {
   const parts: SqlFragment[] = [];
   if (s.indexer !== undefined) parts.push(sql`indexer = ${s.indexer}`);
+  if (s.sinceMs !== undefined) parts.push(sql`hour_ms >= ${s.sinceMs}`);
+  if (s.untilMs !== undefined) parts.push(sql`hour_ms < ${s.untilMs}`);
+  return parts.length === 0 ? sql`1 = 1` : join(parts, ' AND ');
+}
+
+/** {@link scopeWhere} for `usenet_indexer_h2h`, whose rows name two indexers. */
+function headToHeadScopeWhere(s: UsenetIndexerScope): SqlFragment {
+  const parts: SqlFragment[] = [];
+  if (s.indexer !== undefined)
+    parts.push(sql`(winner = ${s.indexer} OR loser = ${s.indexer})`);
   if (s.sinceMs !== undefined) parts.push(sql`hour_ms >= ${s.sinceMs}`);
   if (s.untilMs !== undefined) parts.push(sql`hour_ms < ${s.untilMs}`);
   return parts.length === 0 ? sql`1 = 1` : join(parts, ' AND ');
@@ -228,6 +248,55 @@ export class UsenetIndexerMetricsRepository {
       resolution: r.resolution,
       quality: r.quality,
       releases: Number(r.releases ?? 0),
+    }));
+  }
+
+  /**
+   * Fold one play's rescues into the hour bucket containing `atMs`. Rows must
+   * have distinct (winner, loser) pairs and go in key order, for the same
+   * reasons as {@link recordQuality}.
+   */
+  static async recordHeadToHead(
+    rows: readonly UsenetIndexerHeadToHeadRow[],
+    atMs: number = Date.now()
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    const hourMs = hourFloor(atMs);
+    const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+    const ordered = [...rows].sort(
+      (a, b) => cmp(a.winner, b.winner) || cmp(a.loser, b.loser)
+    );
+    const values = join(
+      ordered.map(
+        (r) => sql`(${hourMs}, ${r.winner}, ${r.loser}, ${r.rescues})`
+      )
+    );
+    await getDb().exec(
+      sql`INSERT INTO usenet_indexer_h2h (hour_ms, winner, loser, rescues)
+          VALUES ${values}
+          ON CONFLICT(hour_ms, winner, loser) DO UPDATE SET
+            rescues = usenet_indexer_h2h.rescues + EXCLUDED.rescues`
+    );
+  }
+
+  /** Rescue totals per (winner, loser) pair over [sinceMs, now]. */
+  static async headToHeadSince(
+    sinceMs: number
+  ): Promise<UsenetIndexerHeadToHeadRow[]> {
+    const rows = await getDb().query<{
+      winner: string;
+      loser: string;
+      rescues: number | string;
+    }>(
+      sql`SELECT winner, loser, SUM(rescues) AS rescues
+            FROM usenet_indexer_h2h
+           WHERE hour_ms >= ${sinceMs}
+           GROUP BY winner, loser`
+    );
+    return rows.map((r) => ({
+      winner: r.winner,
+      loser: r.loser,
+      rescues: Number(r.rescues ?? 0),
     }));
   }
 
@@ -368,10 +437,16 @@ export class UsenetIndexerMetricsRepository {
     };
   }
 
-  /** Also clears the scope's quality rows; returns the rollup rows removed. */
+  /**
+   * Also clears the scope's quality and head-to-head rows (an indexer scope
+   * matches either side of a pair); returns the rollup rows removed.
+   */
   static async deleteScope(scope: UsenetIndexerScope): Promise<number> {
     await getDb().exec(
       sql`DELETE FROM usenet_indexer_quality_metrics WHERE ${scopeWhere(scope)}`
+    );
+    await getDb().exec(
+      sql`DELETE FROM usenet_indexer_h2h WHERE ${headToHeadScopeWhere(scope)}`
     );
     const res = await getDb().exec(
       sql`DELETE FROM usenet_indexer_metrics WHERE ${scopeWhere(scope)}`
@@ -390,12 +465,16 @@ export class UsenetIndexerMetricsRepository {
   }
 
   /**
-   * Delete rollups (and quality rows) older than the cutoff; returns the
-   * rollup rows removed. Last-error rows are kept (1 per indexer).
+   * Delete rollups (and quality and head-to-head rows) older than the
+   * cutoff; returns the rollup rows removed. Last-error rows are kept
+   * (1 per indexer).
    */
   static async pruneOlderThan(cutoffMs: number): Promise<number> {
     await getDb().exec(
       sql`DELETE FROM usenet_indexer_quality_metrics WHERE hour_ms < ${cutoffMs}`
+    );
+    await getDb().exec(
+      sql`DELETE FROM usenet_indexer_h2h WHERE hour_ms < ${cutoffMs}`
     );
     const res = await getDb().exec(
       sql`DELETE FROM usenet_indexer_metrics WHERE hour_ms < ${cutoffMs}`

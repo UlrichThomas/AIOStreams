@@ -13,6 +13,7 @@ import {
   resolvePlaybackTarget,
   resolveExternalTarget,
   runPlayChain,
+  recordHeadToHead,
   getSimpleTextHash,
   DistributedLock,
   type FailoverAttempt,
@@ -202,7 +203,28 @@ router.get(
         );
       }
 
-      const run = () => runPlayChain(attempts, runCfg);
+      // Same-release rescues feed the indexer head-to-head stats. Recorded
+      // inside `run` so requests sharing a running chain don't count it twice.
+      const headToHead = [
+        {
+          type: clickedType,
+          rank: 0,
+          indexer:
+            chain?.clicked?.indexer ??
+            (fileInfo.type === 'usenet' ? fileInfo.indexer : undefined),
+        },
+        ...fallbacks.map((f) => ({
+          type: f.type,
+          rank: f.rank,
+          indexer: f.indexer,
+        })),
+      ];
+      const run = async () => {
+        const r = await runPlayChain(attempts, runCfg);
+        if (hasFailover)
+          recordHeadToHead(headToHead, r.outcomes, r.winnerIndex);
+        return r;
+      };
 
       // Share one running chain across concurrent requests for the same click.
       const result = hasFailover
