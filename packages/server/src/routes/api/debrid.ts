@@ -212,11 +212,13 @@ router.get(
           indexer:
             chain?.clicked?.indexer ??
             (fileInfo.type === 'usenet' ? fileInfo.indexer : undefined),
+          serviceId: chain?.clicked?.serviceId,
         },
         ...fallbacks.map((f) => ({
           type: f.type,
           rank: f.rank,
           indexer: f.indexer,
+          serviceId: f.serviceId,
         })),
       ];
       const run = async () => {

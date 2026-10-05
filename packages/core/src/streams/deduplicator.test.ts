@@ -176,10 +176,20 @@ describe('usenet indexer order', () => {
     assert.equal(results[0].indexer, 'Mid');
   });
 
-  it('falls back to indexer name instead of response order', async () => {
+  it('orders unlisted indexers by name instead of response order', async () => {
+    const a = await dedupUsenet(
+      [nzb('Zeta'), nzb('Alpha'), nzb('Mid')],
+      ['mid']
+    );
+    const b = await dedupUsenet([nzb('Zeta'), nzb('Alpha')], ['mid']);
+    assert.equal(a[0].indexer, 'Mid');
+    assert.equal(b[0].indexer, 'Alpha');
+  });
+
+  it("keeps the aggregator's response order when no order is set", async () => {
     const a = await dedupUsenet([nzb('Zeta'), nzb('Alpha')]);
-    const b = await dedupUsenet([nzb('Alpha'), nzb('Zeta')]);
-    assert.equal(a[0].indexer, 'Alpha');
+    const b = await dedupUsenet([nzb('Alpha'), nzb('Zeta')], []);
+    assert.equal(a[0].indexer, 'Zeta');
     assert.equal(b[0].indexer, 'Alpha');
   });
 });

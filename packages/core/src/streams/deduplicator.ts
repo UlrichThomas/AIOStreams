@@ -483,16 +483,18 @@ class StreamDeduplicator {
   /**
    * Last resort for usenet duplicates the addon order can't split, e.g. several
    * indexers behind one NZBHydra2 / Prowlarr addon: the user's indexer order,
-   * then indexer name so the winner never depends on response order.
+   * then indexer name for the unlisted ones. With no order set it's a tie, so
+   * the aggregator's own response (priority) order still decides.
    */
   private compareByIndexer(a: ParsedStream, b: ParsedStream): number {
     if (a.type !== 'usenet' || b.type !== 'usenet') return 0;
+    const order = (this.userData.deduplicator?.indexerOrder ?? [])
+      .map((n) => n.trim().toLowerCase())
+      .filter(Boolean);
+    if (order.length === 0) return 0;
     const ai = a.indexer?.trim().toLowerCase();
     const bi = b.indexer?.trim().toLowerCase();
     if (!ai || !bi || ai === bi) return 0;
-    const order = (this.userData.deduplicator?.indexerOrder ?? []).map((n) =>
-      n.trim().toLowerCase()
-    );
     let aIndex = order.indexOf(ai);
     let bIndex = order.indexOf(bi);
     aIndex = aIndex === -1 ? Infinity : aIndex;
