@@ -1,4 +1,4 @@
-import { DebridError } from '../../debrid/base.js';
+import { asSourceFailure, DebridError } from '../../debrid/base.js';
 import {
   ArticleNotFoundError,
   NotStreamableError,
@@ -157,7 +157,7 @@ export function toDebridError(err: unknown): DebridError {
       cause: err,
     });
   }
-  return new DebridError(
+  const wrapped = new DebridError(
     err instanceof Error ? err.message : 'usenet inspection failed',
     {
       statusCode: 502,
@@ -169,4 +169,6 @@ export function toDebridError(err: unknown): DebridError {
       cause: err,
     }
   );
+  // An unstreamable archive is the release's fault; transport errors aren't.
+  return err instanceof NotStreamableError ? asSourceFailure(wrapped) : wrapped;
 }

@@ -43,6 +43,12 @@ export class DebridError extends Error {
   statusText: string;
   cause?: unknown;
   type?: DebridErrorType = 'unknown_error';
+  /**
+   * The source (NZB, indexer, release) is at fault whatever `code` says, e.g.
+   * an indexer's .nzb download failing as BAD_GATEWAY. Set via
+   * {@link asSourceFailure}; failover stats count it against the source.
+   */
+  sourceFailure?: boolean;
   constructor(
     message: string,
     options: Pick<
@@ -78,6 +84,12 @@ export class DebridError extends Error {
   }
 }
 registerLockErrorClass(DebridError);
+
+/** Mark `err` as the source's fault (see {@link DebridError.sourceFailure}). */
+export function asSourceFailure(err: DebridError): DebridError {
+  err.sourceFailure = true;
+  return err;
+}
 
 export const convertStatusCodeToError = (code: number): DebridError['code'] => {
   switch (code) {
