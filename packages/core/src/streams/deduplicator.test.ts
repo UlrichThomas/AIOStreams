@@ -137,3 +137,49 @@ describe('mergeLanguagesAndSubtitles', () => {
     assert.equal(winner.parsedFile?.mediaInfoQuality, 'addon');
   });
 });
+
+describe('usenet indexer order', () => {
+  function nzb(indexer: string): ParsedStream {
+    return {
+      id: `${indexer}-${Math.random()}`,
+      type: 'usenet',
+      filename: 'Same.Release.2160p.mkv',
+      indexer,
+      service: { id: 'torbox', cached: true },
+      addon: {
+        instanceId: 'hydra',
+        resultPassthrough: false,
+        preset: { id: 'hydra' },
+      },
+    } as unknown as ParsedStream;
+  }
+
+  function dedupUsenet(streams: ParsedStream[], indexerOrder?: string[]) {
+    return new StreamDeduplicator({
+      deduplicator: {
+        enabled: true,
+        keys: ['filename'],
+        cached: 'single_result',
+        indexerOrder,
+      },
+      presets: [{ instanceId: 'hydra' }],
+      services: [{ id: 'torbox', enabled: true }],
+    } as unknown as UserData).deduplicate(streams);
+  }
+
+  it('keeps the copy from the indexer listed first', async () => {
+    const results = await dedupUsenet(
+      [nzb('Zeta'), nzb('Alpha'), nzb('Mid')],
+      ['mid', 'zeta']
+    );
+    assert.equal(results.length, 1);
+    assert.equal(results[0].indexer, 'Mid');
+  });
+
+  it('falls back to indexer name instead of response order', async () => {
+    const a = await dedupUsenet([nzb('Zeta'), nzb('Alpha')]);
+    const b = await dedupUsenet([nzb('Alpha'), nzb('Zeta')]);
+    assert.equal(a[0].indexer, 'Alpha');
+    assert.equal(b[0].indexer, 'Alpha');
+  });
+});

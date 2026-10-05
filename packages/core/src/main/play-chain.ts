@@ -33,6 +33,8 @@ export interface PlayChainItem {
    * 'external' = a non-owned addon debrid URL resolved by probing.
    */
   kind?: 'owned' | 'external';
+  /** Usenet source indexer, for same-release head-to-head stats. */
+  indexer?: string;
   /**
    * Same-release alternative sources. Tried at the SAME rank as this item,
    * so they bypass the preferred-grace window (a duplicate isn't a worse release).
@@ -185,6 +187,7 @@ export async function buildPlayChain(
         filename: v.filename,
         proxied: v.proxied,
         kind: v.kind ?? 'owned',
+        indexer: v.indexer,
       }));
     return {
       url: s.url!,
@@ -193,6 +196,7 @@ export async function buildPlayChain(
       filename: s.filename,
       proxied: shouldProxyStream(s, opts.proxyConfig),
       kind: isOwnedPlayback(s) ? 'owned' : 'external',
+      indexer: s.indexer,
       variants: variants.length ? variants : undefined,
     };
   });
