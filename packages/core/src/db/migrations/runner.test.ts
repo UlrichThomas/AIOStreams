@@ -12,6 +12,19 @@ import { runMigrations } from './runner.js';
 let dir: string;
 let driver: SqliteDriver;
 
+/** Apply a migration's sqlite SQL and record it under `id`, bypassing the runner. */
+async function applyAs(id: number, m: (typeof MIGRATIONS)[number]) {
+  const statements = m.up.sqlite
+    .split(/;\s*(?:\r?\n|$)/g)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  for (const stmt of statements) await driver.exec(stmt);
+  await driver.exec(`INSERT INTO _migrations (id, name) VALUES (?, ?)`, [
+    id,
+    m.name,
+  ]);
+}
+
 async function appliedRows(): Promise<Map<number, string>> {
   const rows = await driver.query<{ id: number; name: string }>(
     `SELECT id, name FROM _migrations`
@@ -35,36 +48,44 @@ describe('runMigrations', () => {
     const applied = await appliedRows();
     for (const m of MIGRATIONS) assert.equal(applied.get(m.id), m.name);
     for (const r of RENUMBERED_MIGRATIONS)
-      assert.equal(applied.has(r.from), false);
+      assert.notEqual(applied.get(r.from), r.name);
   });
 
   it('moves rows from an earlier fork build to their new ids without re-running them', async () => {
-    await runMigrations(driver);
-    // Rewind to how an earlier fork build recorded them.
-    for (const r of RENUMBERED_MIGRATIONS)
-      await driver.exec(`UPDATE _migrations SET id = ? WHERE id = ?`, [
-        r.from,
-        r.to,
-      ]);
+    // Recreate an earlier fork build's database: upstream's migrations up to
+    // 39, then the fork's under the ids upstream has since taken.
+    await driver.exec(
+      `CREATE TABLE _migrations (
+         id INTEGER PRIMARY KEY,
+         name TEXT NOT NULL,
+         applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+       )`
+    );
+    const renumbered = new Map(RENUMBERED_MIGRATIONS.map((r) => [r.name, r]));
+    const firstOld = Math.min(...RENUMBERED_MIGRATIONS.map((r) => r.from));
+    for (const m of MIGRATIONS)
+      if (m.id < firstOld && !renumbered.has(m.name)) await applyAs(m.id, m);
+    for (const m of MIGRATIONS) {
+      const r = renumbered.get(m.name);
+      if (r) await applyAs(r.from, m);
+    }
 
-    // Re-running the ADD COLUMN migrations would throw on sqlite.
+    // Re-running the fork's ADD COLUMN migrations would throw on sqlite.
     await runMigrations(driver);
     const applied = await appliedRows();
-    for (const r of RENUMBERED_MIGRATIONS) {
-      assert.equal(applied.get(r.to), r.name);
-      assert.equal(applied.has(r.from), false);
-    }
+    for (const m of MIGRATIONS) assert.equal(applied.get(m.id), m.name);
     assert.equal(applied.size, MIGRATIONS.length);
   });
 
   it("leaves an upstream migration that uses a fork's old id alone", async () => {
     await runMigrations(driver);
-    await driver.exec(`INSERT INTO _migrations (id, name) VALUES (?, ?)`, [
-      40,
-      'watch_state_rating',
-    ]);
     await runMigrations(driver);
-    assert.equal((await appliedRows()).get(40), 'watch_state_rating');
+    const applied = await appliedRows();
+    for (const r of RENUMBERED_MIGRATIONS) {
+      const upstream = MIGRATIONS.find((m) => m.id === r.from);
+      if (upstream) assert.equal(applied.get(r.from), upstream.name);
+      assert.equal(applied.get(r.to), r.name);
+    }
   });
 
   it('still rejects a database migrated by a different build', async () => {
