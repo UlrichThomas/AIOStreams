@@ -105,10 +105,8 @@ describe('UsenetIndexerMetricsRepository head-to-head', () => {
 
   after(async () => {
     await closeDb();
-    fs.rmSync(path.join(process.cwd(), '.test-tmp'), {
-      recursive: true,
-      force: true,
-    });
+    // Only this suite's folder: other files may still hold theirs open.
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it('accumulates rescues per pair and prunes old hours', async () => {

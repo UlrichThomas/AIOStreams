@@ -46,9 +46,15 @@ function sinceMsFor(range: string): number | undefined {
     : hourFloor(Date.now()) - (hours - 1) * HOUR_MS;
 }
 
-/** Every hourly row a reset removes, quality-mix rows included. */
+/** Every hourly row a reset removes, quality, age and playback rows included. */
 function rowsOf(r: UsenetStatsResetResult): number {
-  return r.providerRows + r.indexerRows + r.indexerQualityRows;
+  return (
+    r.providerRows +
+    r.indexerRows +
+    r.indexerQualityRows +
+    (r.indexerAgeRows ?? 0) +
+    (r.playbackRows ?? 0)
+  );
 }
 
 function impactOf(
@@ -71,6 +77,12 @@ function impactOf(
   }
   if (target !== 'providers' && r.indexerQualityRows > 0) {
     detail.push('quality mix');
+  }
+  if (target !== 'providers' && (r.indexerAgeRows ?? 0) > 0) {
+    detail.push('age breakdown');
+  }
+  if ((r.playbackRows ?? 0) > 0) {
+    detail.push(`${formatCompact(r.plays ?? 0)} plays`);
   }
   const plural = rows === 1 ? 'row' : 'rows';
   return `Removes ${formatCompact(rows)} hourly ${plural}${

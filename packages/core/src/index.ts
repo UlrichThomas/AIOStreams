@@ -105,3 +105,8 @@ export type {
   RunPlayChainResult,
   FailoverAttemptOutcome,
 } from './main/failover.js';
+export { recordPlayback } from './main/playback-metrics.js';
+export type {
+  PlaybackAttemptInfo,
+  PlaybackOutcome,
+} from './main/playback-metrics.js';

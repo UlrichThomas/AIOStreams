@@ -7,7 +7,7 @@ import { Popover } from '@aiostreams/ui/popover';
 import { Tooltip } from '@aiostreams/ui/tooltip';
 import { Switch } from '@aiostreams/ui/switch';
 import { cn } from '@aiostreams/ui/core/styling';
-import { AreaChart, DonutChart, Stat } from '@aiostreams/ui/charts';
+import { AreaChart, BarChart, DonutChart, Stat } from '@aiostreams/ui/charts';
 import { DashboardQueryBoundary } from '@/components/shared/dashboard-query-boundary';
 import { AnimatedNumber } from '@/components/shared/animated-number';
 import {
@@ -22,6 +22,7 @@ import {
   type UsenetIndexerStatRow,
   type UsenetIndexerHeadToHeadRow,
   type UsenetIndexerQualityCell,
+  type UsenetIndexerAgeCell,
   type UsenetStatsOverview,
 } from './queries';
 import {
@@ -1428,6 +1429,291 @@ function IndexerQualityTable({
   );
 }
 
+/** Below this many grabs an age cell is shown muted: too few to read. */
+const MIN_AGE_SAMPLES = 10;
+
+/** Grabs in a cell, blocklist refusals included. */
+function ageTotal(c: UsenetIndexerAgeCell): number {
+  return c.ok + c.degraded + c.failed + c.blocklisted;
+}
+
+function ageLabel(bucket: string): string {
+  return bucket === 'unknown' ? 'Unknown' : bucket.replace('-', '–');
+}
+
+function AgeCell({ cell, who }: { cell: UsenetIndexerAgeCell; who: string }) {
+  const n = ageTotal(cell);
+  if (n === 0) {
+    return <td className="py-2 px-2 text-right text-[--muted]">—</td>;
+  }
+  const dead = cell.failed + cell.blocklisted;
+  const rate = dead / n;
+  const thin = n < MIN_AGE_SAMPLES;
+  return (
+    <td
+      className={cn(
+        'py-2 px-2 text-right tabular-nums',
+        thin && 'text-[--muted]'
+      )}
+      style={
+        !thin && rate > 0
+          ? {
+              backgroundColor: `rgb(248 113 113 / ${(0.08 + rate * 0.6).toFixed(3)})`,
+            }
+          : undefined
+      }
+      title={`${who}, ${ageLabel(cell.ageBucket)} old: ${n.toLocaleString()} grabs · ${cell.failed.toLocaleString()} failed (${cell.failedMissing.toLocaleString()} missing articles) · ${cell.blocklisted.toLocaleString()} already blocklisted · ${cell.degraded.toLocaleString()} degraded${thin ? ' · too few grabs to read' : ''}`}
+    >
+      {formatPercent(rate)}
+    </td>
+  );
+}
+
+/**
+ * Playback grab failure rate by the release's post age: the top row across
+ * all indexers, then each indexer. Mixes takedowns (young posts) with expired
+ * retention (old ones) and every provider, so it reads as "failure by post
+ * age", not as any one provider's retention.
+ */
+function IndexerAgeTable({
+  indexers,
+  totals,
+  onReset,
+}: {
+  indexers: UsenetIndexerStatRow[];
+  totals: UsenetIndexerAgeCell[];
+  onReset: (target: ResetStatsTarget) => void;
+}) {
+  const rows = indexers
+    .map((i) => ({
+      indexer: i.indexer,
+      cells: i.ageMix ?? [],
+      total: (i.ageMix ?? []).reduce((s, c) => s + ageTotal(c), 0),
+    }))
+    .filter((r) => r.total > 0)
+    .sort((a, b) => b.total - a.total);
+  const grandTotal = totals.reduce((s, c) => s + ageTotal(c), 0);
+  if (grandTotal === 0) {
+    return (
+      <p className="text-sm text-[--muted]">
+        No playback grabs recorded in this window yet.
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-3 min-w-0">
+      <p className="text-xs text-[--muted]">
+        Share of playback grabs that failed, by how old the post was. Young
+        failures are mostly takedowns, old ones mostly expired retention. Counts
+        posts the blocklist refused as failures. Arr and manual imports are left
+        out. Cells with fewer than {MIN_AGE_SAMPLES} grabs are muted.
+      </p>
+      <div className="overflow-x-auto -mx-4 px-4 lg:mx-0 lg:px-0">
+        <table className="w-full text-sm">
+          <thead className="text-[--muted] text-xs">
+            <tr className="text-left border-b border-[--border]">
+              <th className="py-2 pr-3 uppercase">Indexer</th>
+              {totals.map((c) => (
+                <th
+                  key={c.ageBucket}
+                  className="py-2 px-2 text-right font-medium whitespace-nowrap"
+                >
+                  {ageLabel(c.ageBucket)}
+                </th>
+              ))}
+              <th className="py-2 px-3 text-right uppercase">Grabs</th>
+              <th className="py-2 pl-3 w-8" aria-label="Actions" />
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="border-b border-[--border] font-semibold">
+              <td className="py-2 pr-3 whitespace-nowrap">All indexers</td>
+              {totals.map((c) => (
+                <AgeCell key={c.ageBucket} cell={c} who="All indexers" />
+              ))}
+              <td className="py-2 px-3 text-right tabular-nums">
+                {formatCompact(grandTotal)}
+              </td>
+              <td />
+            </tr>
+            {rows.map((r) => (
+              <tr key={r.indexer} className="border-b border-[--border]/50">
+                <td className="py-2 pr-3 font-medium whitespace-nowrap">
+                  {r.indexer}
+                </td>
+                {r.cells.map((c) => (
+                  <AgeCell key={c.ageBucket} cell={c} who={r.indexer} />
+                ))}
+                <td className="py-2 px-3 text-right tabular-nums font-medium">
+                  {formatCompact(r.total)}
+                </td>
+                <td className="py-2 pl-3 text-right">
+                  <Tooltip
+                    trigger={
+                      <IconButton
+                        size="sm"
+                        intent="alert-subtle"
+                        icon={<BiEraser />}
+                        onClick={() =>
+                          onReset({
+                            target: 'indexers',
+                            id: r.indexer,
+                            label: r.indexer,
+                          })
+                        }
+                        aria-label="Reset stats for this indexer"
+                      />
+                    }
+                  >
+                    Reset this indexer's recorded stats
+                  </Tooltip>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/** Failover rank → which release in the chain played. */
+const RANK_LABELS: Record<string, string> = {
+  '0': 'clicked release',
+  '1': '2nd release',
+  '2': '3rd release',
+  '3+': '4th+ release',
+};
+
+function latencyLabel(bucket: string | null): string {
+  return bucket == null ? '—' : bucket.replace('-', '–');
+}
+
+/**
+ * Click to playable URL, and how much failover it took. Latency is bucketed,
+ * so p50 / p90 name the bucket they fall in rather than an exact time.
+ */
+function PlaybackCard({
+  playback,
+}: {
+  playback: UsenetStatsOverview['playback'] | undefined;
+}) {
+  const [kind, setKind] = React.useState<'usenet' | 'debrid'>('usenet');
+  const p = playback?.[kind];
+  return (
+    <Card className="p-4">
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <h3 className="text-sm font-semibold">Time to play</h3>
+        <SegmentedToggle
+          label="Playback kind"
+          options={
+            [
+              { value: 'usenet', label: 'Usenet' },
+              { value: 'debrid', label: 'Debrid' },
+            ] as const
+          }
+          value={kind}
+          onChange={setKind}
+        />
+      </div>
+      {!p || p.plays === 0 ? (
+        <p className="text-sm text-[--muted]">
+          No plays recorded in this window yet.
+        </p>
+      ) : (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+            <Stat
+              label="Plays"
+              value={formatCompact(p.plays)}
+              hint={[
+                `${formatPercent(p.ok / p.plays)} played`,
+                p.abandoned > 0 && `${formatCompact(p.abandoned)} gave up`,
+                p.error > 0 && `${formatCompact(p.error)} failed`,
+                p.downloading > 0 &&
+                  `${formatCompact(p.downloading)} downloading`,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            />
+            <Stat
+              label="Median wait"
+              value={latencyLabel(p.p50Bucket)}
+              hint={`p90 ${latencyLabel(p.p90Bucket)}${
+                p.avgMs != null ? ` · avg ${formatDurationMs(p.avgMs)}` : ''
+              }`}
+            />
+            <Stat
+              label="Slow plays"
+              value={p.slowShare == null ? '—' : formatPercent(p.slowShare)}
+              hint="took 10s or more"
+            />
+            <Stat
+              label="Saved by failover"
+              value={
+                p.ok > 0
+                  ? formatPercent(
+                      (p.rescuedSameRelease + p.rescuedOtherRelease) / p.ok
+                    )
+                  : '—'
+              }
+              hint={`${formatCompact(p.rescuedSameRelease)} same release · ${formatCompact(p.rescuedOtherRelease)} other release`}
+            />
+            <Stat
+              label="Wasted attempts"
+              value={p.wastedPerOk == null ? '—' : p.wastedPerOk.toFixed(2)}
+              hint="failed or cut-off attempts per play"
+            />
+          </div>
+          <div className="grid lg:grid-cols-[1fr,280px] gap-6">
+            <BarChart
+              data={p.latency.map((l) => ({
+                bucket: latencyLabel(l.bucket),
+                plays: l.plays,
+              }))}
+              xKey="bucket"
+              series={[{ key: 'plays', label: 'Plays', color: 'var(--brand)' }]}
+              height={200}
+              valueFormatter={(v) => formatCompact(Number(v))}
+            />
+            <table className="w-full text-sm self-start">
+              <thead className="text-[--muted] text-xs uppercase">
+                <tr className="text-left border-b border-[--border]">
+                  <th className="py-2 pr-3">Service</th>
+                  <th className="py-2 px-3 text-right">Plays</th>
+                  <th className="py-2 pl-3 text-right">Avg wait</th>
+                </tr>
+              </thead>
+              <tbody>
+                {p.byService.map((s) => (
+                  <tr key={s.service} className="border-b border-[--border]/50">
+                    <td className="py-2 pr-3 font-medium">{s.service}</td>
+                    <td className="py-2 px-3 text-right tabular-nums">
+                      {formatCompact(s.plays)}
+                    </td>
+                    <td className="py-2 pl-3 text-right tabular-nums">
+                      {s.avgMs == null ? '—' : formatDurationMs(s.avgMs)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-xs text-[--muted] tabular-nums">
+            Played from:{' '}
+            {p.depth
+              .map(
+                (d) =>
+                  `${RANK_LABELS[d.rank] ?? d.rank} ${formatCompact(d.plays)}`
+              )
+              .join(' · ')}
+          </p>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function ResetAllButton({
   label,
   onClick,
@@ -1473,7 +1759,7 @@ function StatsSection({
     .slice(0, 6)
     .map((i) => ({ name: i.indexer, value: i.grabs }));
   const [indexerView, setIndexerView] = React.useState<
-    'grabs' | 'searches' | 'quality' | 'preference'
+    'grabs' | 'searches' | 'quality' | 'preference' | 'age'
   >('grabs');
   const grabIndexers = data.indexers.filter((i) => i.grabs > 0);
   const totalResults = data.indexers.reduce((s, i) => s + i.results, 0);
@@ -1499,7 +1785,9 @@ function StatsSection({
     .sort((a, b) => b.value - a.value)
     .slice(0, 6);
   const donut =
-    indexerView === 'grabs' || indexerView === 'preference'
+    indexerView === 'grabs' ||
+    indexerView === 'preference' ||
+    indexerView === 'age'
       ? { data: grabShare, label: 'grabs', value: totalGrabs }
       : indexerView === 'searches'
         ? { data: resultsShare, label: 'results', value: totalResults }
@@ -1517,6 +1805,12 @@ function StatsSection({
       <IndexerPreferenceTable
         indexers={data.indexers}
         headToHead={data.headToHead ?? []}
+      />
+    ) : indexerView === 'age' ? (
+      <IndexerAgeTable
+        indexers={data.indexers}
+        totals={data.ageTotals ?? []}
+        onReset={onReset}
       />
     ) : (
       <IndexerQualityTable indexers={data.indexers} onReset={onReset} />
@@ -1621,6 +1915,7 @@ function StatsSection({
                   { value: 'searches', label: 'Searches' },
                   { value: 'quality', label: 'Quality' },
                   { value: 'preference', label: 'Preference' },
+                  { value: 'age', label: 'Age' },
                 ] as const
               }
               value={indexerView}
@@ -1650,6 +1945,8 @@ function StatsSection({
           table
         )}
       </Card>
+
+      <PlaybackCard playback={data.playback} />
     </div>
   );
 }

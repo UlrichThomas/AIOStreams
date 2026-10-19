@@ -14,6 +14,7 @@ import {
   resolveExternalTarget,
   runPlayChain,
   recordHeadToHead,
+  recordPlayback,
   getSimpleTextHash,
   DistributedLock,
   type FailoverAttempt,
@@ -58,6 +59,12 @@ router.get(
     '/playback/:encryptedStoreAuth/:fileInfo/:metadataId/:filename',
   ],
   async (req: Request<PlaybackParams>, res: Response, next: NextFunction) => {
+    const routeStart = Date.now();
+    // A close before the response ends means the player gave up waiting.
+    let clientGone = false;
+    res.on('close', () => {
+      if (!res.writableEnded) clientGone = true;
+    });
     try {
       const {
         encryptedStoreAuth,
@@ -241,10 +248,26 @@ router.get(
           serviceId: f.serviceId,
         })),
       ];
+      const clickKey = `${getSimpleTextHash(
+        encryptedStoreAuth + metadataId + filename + fallbackKey
+      )}:${clientIp ?? '-'}`;
       const run = async () => {
         const r = await runPlayChain(attempts, runCfg);
         if (hasFailover)
           recordHeadToHead(headToHead, r.outcomes, r.winnerIndex);
+        recordPlayback(
+          {
+            kind: clickedType,
+            attempts: headToHead,
+            outcomes: r.outcomes,
+            winnerIndex: r.winnerIndex,
+            resolved: !!r.url,
+            errored: !r.url && !!r.error,
+            ms: Date.now() - routeStart,
+            abandoned: clientGone,
+          },
+          clickKey
+        );
         return r;
       };
 
@@ -252,9 +275,7 @@ router.get(
       const result = hasFailover
         ? (
             await DistributedLock.getInstance().withLock(
-              `failover:${getSimpleTextHash(
-                encryptedStoreAuth + metadataId + filename + fallbackKey
-              )}:${clientIp ?? '-'}`,
+              `failover:${clickKey}`,
               run,
               {
                 timeout: Math.max(runCfg.maxWaitMs, 180_000),

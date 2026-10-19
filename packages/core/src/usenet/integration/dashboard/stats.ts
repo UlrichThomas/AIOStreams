@@ -3,11 +3,15 @@ import { createLogger } from '../../../logging/logger.js';
 import {
   UsenetMetricsRepository,
   UsenetIndexerMetricsRepository,
+  PlaybackMetricsRepository,
   type UsenetIndexerRollup,
   type UsenetIndexerHeadToHeadRow,
+  type UsenetIndexerAgeRow,
   type UsenetMetricDelta,
 } from '../../../db/index.js';
 import { indexerRankInput, suggestedRanks } from './indexer-rank.js';
+import { summarisePlayback, type PlaybackSummary } from './playback-summary.js';
+import { AGE_BUCKETS } from '../age-metrics.js';
 import {
   ProviderConfig,
   ProviderState,
@@ -139,6 +143,20 @@ export interface UsenetIndexerStatRow {
   rescuedOthers: number;
   /** Times this indexer's NZB failed and another's copy of the release played. */
   wasRescued: number;
+  /** Playback grab outcomes by post age, in bucket order (empty buckets kept). */
+  ageMix: UsenetIndexerAgeCell[];
+}
+
+/** Playback grab outcomes for one post-age bucket. */
+export interface UsenetIndexerAgeCell {
+  ageBucket: string;
+  ok: number;
+  degraded: number;
+  failed: number;
+  /** Subset of `failed`: articles dead on every provider. */
+  failedMissing: number;
+  /** Refused before import: the blocklist already knew the post dead. */
+  blocklisted: number;
 }
 
 export interface UsenetIndexerQualityCell {
@@ -184,8 +202,44 @@ export interface UsenetStatsOverview {
   indexers: UsenetIndexerStatRow[];
   /** Same-release failover rescues per (winner, loser) pair. */
   headToHead: UsenetIndexerHeadToHeadRow[];
+  /** Every indexer's playback grab outcomes by post age, in bucket order. */
+  ageTotals: UsenetIndexerAgeCell[];
+  /** Click-to-answer and failover depth of plays, by content kind. */
+  playback: { usenet: PlaybackSummary; debrid: PlaybackSummary };
   throughput: UsenetThroughputPoint[];
   firstSeenAt?: number;
+}
+
+/**
+ * Pure: age rows folded into one cell per bucket, every bucket present and in
+ * order, so the dashboard's columns line up across indexers.
+ */
+export function ageCells(
+  rows: readonly UsenetIndexerAgeRow[]
+): UsenetIndexerAgeCell[] {
+  const cells = new Map<string, UsenetIndexerAgeCell>(
+    AGE_BUCKETS.map((ageBucket) => [
+      ageBucket,
+      {
+        ageBucket,
+        ok: 0,
+        degraded: 0,
+        failed: 0,
+        failedMissing: 0,
+        blocklisted: 0,
+      },
+    ])
+  );
+  for (const r of rows) {
+    const c = cells.get(r.ageBucket);
+    if (!c) continue;
+    c.ok += r.ok;
+    c.degraded += r.degraded;
+    c.failed += r.failed;
+    c.failedMissing += r.failedMissing;
+    c.blocklisted += r.blocklisted;
+  }
+  return [...cells.values()];
 }
 
 /**
@@ -312,11 +366,12 @@ export async function pruneUsenetMetrics(
   retentionDays: number
 ): Promise<number> {
   const cutoff = Date.now() - retentionDays * DAY_MS;
-  const [providerRows, indexerRows] = await Promise.all([
+  const [providerRows, indexerRows, playbackRows] = await Promise.all([
     UsenetMetricsRepository.pruneOlderThan(cutoff),
     UsenetIndexerMetricsRepository.pruneOlderThan(cutoff),
+    PlaybackMetricsRepository.pruneOlderThan(cutoff),
   ]);
-  return providerRows + indexerRows;
+  return providerRows + indexerRows + playbackRows;
 }
 
 // ---------------------------------------------------------------------------
@@ -348,6 +403,11 @@ export interface UsenetStatsResetResult {
   indexerSearches: number;
   /** Resolution × quality rows, counted apart from the hourly rollups. */
   indexerQualityRows: number;
+  /** Post-age rows, counted apart from the hourly rollups. */
+  indexerAgeRows: number;
+  /** Playback rows: cleared only by an all-stats reset (no `id`). */
+  playbackRows: number;
+  plays: number;
   lastErrorRows: number;
 }
 
@@ -372,6 +432,8 @@ export async function resetUsenetStats(
   const { target, id, sinceMs, untilMs, dryRun = false, username } = input;
   const touchesProviders = target === 'providers' || target === 'all';
   const touchesIndexers = target === 'indexers' || target === 'all';
+  // Plays belong to no single provider or indexer.
+  const touchesPlayback = target === 'all' && id === undefined;
   const providerScope = { providerId: id, sinceMs, untilMs };
   const indexerScope = { indexer: id, sinceMs, untilMs };
 
@@ -382,7 +444,10 @@ export async function resetUsenetStats(
     : { rows: 0, articles: 0, bytes: 0 };
   const indexer = touchesIndexers
     ? await UsenetIndexerMetricsRepository.sumScope(indexerScope)
-    : { rows: 0, grabs: 0, searches: 0, qualityRows: 0 };
+    : { rows: 0, grabs: 0, searches: 0, qualityRows: 0, ageRows: 0 };
+  const playback = touchesPlayback
+    ? await PlaybackMetricsRepository.sumScope({ sinceMs, untilMs })
+    : { rows: 0, plays: 0 };
 
   // The last-error row carries no hour, so only an unbounded reset can clear it.
   const clearsLastError =
@@ -394,6 +459,8 @@ export async function resetUsenetStats(
       await UsenetMetricsRepository.deleteScope(providerScope);
     if (touchesIndexers)
       await UsenetIndexerMetricsRepository.deleteScope(indexerScope);
+    if (touchesPlayback)
+      await PlaybackMetricsRepository.deleteScope({ sinceMs, untilMs });
     if (clearsLastError) {
       const [grabErrRows, searchErrRows] = await Promise.all([
         UsenetIndexerMetricsRepository.deleteLastError(id),
@@ -411,6 +478,8 @@ export async function resetUsenetStats(
         providerRows: provider.rows,
         indexerRows: indexer.rows,
         indexerQualityRows: indexer.qualityRows,
+        indexerAgeRows: indexer.ageRows,
+        playbackRows: playback.rows,
       },
       'usenet stats reset'
     );
@@ -425,6 +494,9 @@ export async function resetUsenetStats(
     indexerGrabs: indexer.grabs,
     indexerSearches: indexer.searches,
     indexerQualityRows: indexer.qualityRows,
+    indexerAgeRows: indexer.ageRows,
+    playbackRows: playback.rows,
+    plays: playback.plays,
     lastErrorRows,
   };
 }
@@ -508,6 +580,8 @@ export async function getUsenetStatsOverview(
     indexerSearchErrors,
     indexerQuality,
     headToHead,
+    indexerAge,
+    playbackRows,
   ] = await Promise.all([
     UsenetMetricsRepository.summaryByProvider(sinceMs),
     UsenetMetricsRepository.timeSeries(sinceMs, bucketMs),
@@ -517,6 +591,8 @@ export async function getUsenetStatsOverview(
     UsenetIndexerMetricsRepository.lastSearchErrors(),
     UsenetIndexerMetricsRepository.qualityByIndexer(sinceMs),
     UsenetIndexerMetricsRepository.headToHeadSince(sinceMs),
+    UsenetIndexerMetricsRepository.ageByIndexer(sinceMs),
+    PlaybackMetricsRepository.summarySince(sinceMs),
   ]);
   const summaryById = new Map(summary.map((s) => [s.providerId, s]));
 
@@ -621,6 +697,7 @@ export async function getUsenetStatsOverview(
   const extraIndexers = new Set([
     ...qualityByIndexer.keys(),
     ...headToHead.flatMap((r) => [r.winner, r.loser]),
+    ...indexerAge.map((r) => r.indexer),
   ]);
   const rollups = [
     ...indexerSummary,
@@ -628,6 +705,12 @@ export async function getUsenetStatsOverview(
       .filter((indexer) => !summaryIndexers.has(indexer))
       .map(emptyIndexerRollup),
   ];
+  const ageByIndexer = new Map<string, UsenetIndexerAgeRow[]>();
+  for (const r of indexerAge) {
+    const list = ageByIndexer.get(r.indexer);
+    if (list) list.push(r);
+    else ageByIndexer.set(r.indexer, [r]);
+  }
   const rankInputs = new Map(
     rollups.map((agg) => [agg.indexer, indexerRankInput(agg)])
   );
@@ -705,6 +788,7 @@ export async function getUsenetStatsOverview(
         suggestedRank: ranks.get(agg.indexer) ?? null,
         rescuedOthers: rescuedOthers.get(agg.indexer) ?? 0,
         wasRescued: wasRescued.get(agg.indexer) ?? 0,
+        ageMix: ageCells(ageByIndexer.get(agg.indexer) ?? []),
       };
     })
     .sort(
@@ -737,6 +821,11 @@ export async function getUsenetStatsOverview(
     providers,
     indexers,
     headToHead,
+    ageTotals: ageCells(indexerAge),
+    playback: {
+      usenet: summarisePlayback(playbackRows, 'usenet'),
+      debrid: summarisePlayback(playbackRows, 'debrid'),
+    },
     throughput,
     firstSeenAt,
   };
