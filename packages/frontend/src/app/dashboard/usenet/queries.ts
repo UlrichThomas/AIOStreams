@@ -159,6 +159,46 @@ export interface UsenetIndexerStatRow {
   rescuedOthers: number;
   /** Times this indexer's NZB failed and another's copy played. */
   wasRescued: number;
+  /** Playback grab outcomes by post age, in bucket order. */
+  ageMix: UsenetIndexerAgeCell[];
+}
+
+/** Playback grab outcomes for one post-age bucket. */
+export interface UsenetIndexerAgeCell {
+  ageBucket: string;
+  ok: number;
+  degraded: number;
+  failed: number;
+  /** Subset of `failed`: articles dead on every provider. */
+  failedMissing: number;
+  /** Refused before import: the blocklist already knew the post dead. */
+  blocklisted: number;
+}
+
+export interface PlaybackServiceRow {
+  service: string;
+  plays: number;
+  ok: number;
+  avgMs: number | null;
+}
+
+/** One content kind's plays over a window. */
+export interface PlaybackSummary {
+  plays: number;
+  ok: number;
+  downloading: number;
+  error: number;
+  abandoned: number;
+  latency: { bucket: string; plays: number }[];
+  p50Bucket: string | null;
+  p90Bucket: string | null;
+  slowShare: number | null;
+  avgMs: number | null;
+  rescuedSameRelease: number;
+  rescuedOtherRelease: number;
+  depth: { rank: string; plays: number }[];
+  wastedPerOk: number | null;
+  byService: PlaybackServiceRow[];
 }
 
 /** Same-release failover rescues: `loser`'s NZB failed, `winner`'s played. */
@@ -194,6 +234,8 @@ export interface UsenetStatsOverview {
   providers: UsenetProviderStatRow[];
   indexers: UsenetIndexerStatRow[];
   headToHead: UsenetIndexerHeadToHeadRow[];
+  ageTotals: UsenetIndexerAgeCell[];
+  playback: { usenet: PlaybackSummary; debrid: PlaybackSummary };
   throughput: UsenetThroughputPoint[];
   firstSeenAt?: number;
 }
@@ -396,6 +438,9 @@ export interface UsenetStatsResetResult {
   indexerGrabs: number;
   indexerSearches: number;
   indexerQualityRows: number;
+  indexerAgeRows: number;
+  playbackRows: number;
+  plays: number;
   lastErrorRows: number;
 }
 

@@ -91,6 +91,7 @@ import {
   grabHttpStatus,
   grabErrorMessage,
 } from './grab-metrics.js';
+import { recordAgeOutcome } from './age-metrics.js';
 
 const logger = createLogger('usenet/library');
 
@@ -471,6 +472,15 @@ async function importNzb(
       grabMs: spec.grabMs,
       ...extra,
     });
+    // Playback grabs only: arr / manual imports of old back catalogue would
+    // skew the older age buckets.
+    if (origin === 'playback')
+      recordAgeOutcome({
+        indexer: grabLabel,
+        postedAtSec: postedAt,
+        outcome,
+        errorCode: extra?.errorCode,
+      });
   };
   try {
     const engine = usenetEngineRegistry.get(spec.providers, spec.options);
@@ -856,6 +866,13 @@ export async function resolveFileList(
         { hash: contentHash, key: contentKey, reason: verdict.reason },
         'skipping nzb: post is blocklisted'
       );
+      // Known-dead posts never reach the import, so count them here or the
+      // age buckets they cluster in would look healthier than they are.
+      recordAgeOutcome({
+        indexer: indexerLabelFor(playbackInfo.indexer, playbackInfo.nzb),
+        postedAtSec: nzbPostedAt(nzb),
+        outcome: 'blocklisted',
+      });
       throw new DebridError(
         `nzb is blocklisted (${verdict.reason ?? verdict.verdict})`,
         {

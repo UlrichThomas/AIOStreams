@@ -80,6 +80,22 @@ export interface UsenetIndexerQualityDelta {
 /** One indexer's resolution × quality total over a window. */
 export type UsenetIndexerQualityRow = UsenetIndexerQualityDelta;
 
+/** One playback grab's outcome, bucketed by the release's post age. */
+export interface UsenetIndexerAgeDelta {
+  indexer: string;
+  ageBucket: string;
+  ok?: number;
+  degraded?: number;
+  failed?: number;
+  /** Subset of `failed`: articles dead on every provider. */
+  failedMissing?: number;
+  /** Refused before import: the blocklist already knew the post dead. */
+  blocklisted?: number;
+}
+
+/** One indexer's outcomes in one age bucket over a window. */
+export type UsenetIndexerAgeRow = Required<UsenetIndexerAgeDelta>;
+
 /**
  * Same-release failover rescues: `loser`'s NZB failed and `winner`'s copy of
  * the same release then played.
@@ -251,6 +267,50 @@ export class UsenetIndexerMetricsRepository {
     }));
   }
 
+  /** Fold one playback grab into its age bucket for the hour of `atMs`. */
+  static async recordAge(
+    d: UsenetIndexerAgeDelta,
+    atMs: number = Date.now()
+  ): Promise<void> {
+    const hourMs = hourFloor(atMs);
+    await getDb().exec(
+      sql`INSERT INTO usenet_indexer_age_metrics
+            (hour_ms, indexer, age_bucket, ok, degraded, failed, failed_missing, blocklisted)
+          VALUES
+            (${hourMs}, ${d.indexer}, ${d.ageBucket}, ${d.ok ?? 0}, ${d.degraded ?? 0}, ${d.failed ?? 0}, ${d.failedMissing ?? 0}, ${d.blocklisted ?? 0})
+          ON CONFLICT(hour_ms, indexer, age_bucket) DO UPDATE SET
+            ok = usenet_indexer_age_metrics.ok + EXCLUDED.ok,
+            degraded = usenet_indexer_age_metrics.degraded + EXCLUDED.degraded,
+            failed = usenet_indexer_age_metrics.failed + EXCLUDED.failed,
+            failed_missing = usenet_indexer_age_metrics.failed_missing + EXCLUDED.failed_missing,
+            blocklisted = usenet_indexer_age_metrics.blocklisted + EXCLUDED.blocklisted`
+    );
+  }
+
+  /** Per-indexer outcomes by age bucket over [sinceMs, now]. */
+  static async ageByIndexer(sinceMs: number): Promise<UsenetIndexerAgeRow[]> {
+    const rows = await getDb().query<Record<string, string | number>>(
+      sql`SELECT indexer, age_bucket,
+                 SUM(ok) AS ok,
+                 SUM(degraded) AS degraded,
+                 SUM(failed) AS failed,
+                 SUM(failed_missing) AS failed_missing,
+                 SUM(blocklisted) AS blocklisted
+            FROM usenet_indexer_age_metrics
+           WHERE hour_ms >= ${sinceMs}
+           GROUP BY indexer, age_bucket`
+    );
+    return rows.map((r) => ({
+      indexer: String(r.indexer),
+      ageBucket: String(r.age_bucket),
+      ok: Number(r.ok ?? 0),
+      degraded: Number(r.degraded ?? 0),
+      failed: Number(r.failed ?? 0),
+      failedMissing: Number(r.failed_missing ?? 0),
+      blocklisted: Number(r.blocklisted ?? 0),
+    }));
+  }
+
   /**
    * Fold one play's rescues into the hour bucket containing `atMs`. Rows must
    * have distinct (winner, loser) pairs and go in key order, for the same
@@ -409,9 +469,10 @@ export class UsenetIndexerMetricsRepository {
     grabs: number;
     searches: number;
     qualityRows: number;
+    ageRows: number;
   }> {
     // `rows` is a reserved word in postgres; alias around it.
-    const [row, quality] = await Promise.all([
+    const [row, quality, age] = await Promise.all([
       getDb().maybeOne<{
         row_count: number | string;
         grabs: number | string | null;
@@ -428,22 +489,31 @@ export class UsenetIndexerMetricsRepository {
               FROM usenet_indexer_quality_metrics
              WHERE ${scopeWhere(scope)}`
       ),
+      getDb().maybeOne<{ row_count: number | string }>(
+        sql`SELECT COUNT(*) AS row_count
+              FROM usenet_indexer_age_metrics
+             WHERE ${scopeWhere(scope)}`
+      ),
     ]);
     return {
       rows: Number(row?.row_count ?? 0),
       grabs: Number(row?.grabs ?? 0),
       searches: Number(row?.searches ?? 0),
       qualityRows: Number(quality?.row_count ?? 0),
+      ageRows: Number(age?.row_count ?? 0),
     };
   }
 
   /**
-   * Also clears the scope's quality and head-to-head rows (an indexer scope
-   * matches either side of a pair); returns the rollup rows removed.
+   * Also clears the scope's quality, age and head-to-head rows (an indexer
+   * scope matches either side of a pair); returns the rollup rows removed.
    */
   static async deleteScope(scope: UsenetIndexerScope): Promise<number> {
     await getDb().exec(
       sql`DELETE FROM usenet_indexer_quality_metrics WHERE ${scopeWhere(scope)}`
+    );
+    await getDb().exec(
+      sql`DELETE FROM usenet_indexer_age_metrics WHERE ${scopeWhere(scope)}`
     );
     await getDb().exec(
       sql`DELETE FROM usenet_indexer_h2h WHERE ${headToHeadScopeWhere(scope)}`
@@ -465,13 +535,16 @@ export class UsenetIndexerMetricsRepository {
   }
 
   /**
-   * Delete rollups (and quality and head-to-head rows) older than the
+   * Delete rollups (and quality, age and head-to-head rows) older than the
    * cutoff; returns the rollup rows removed. Last-error rows are kept
    * (1 per indexer).
    */
   static async pruneOlderThan(cutoffMs: number): Promise<number> {
     await getDb().exec(
       sql`DELETE FROM usenet_indexer_quality_metrics WHERE hour_ms < ${cutoffMs}`
+    );
+    await getDb().exec(
+      sql`DELETE FROM usenet_indexer_age_metrics WHERE hour_ms < ${cutoffMs}`
     );
     await getDb().exec(
       sql`DELETE FROM usenet_indexer_h2h WHERE hour_ms < ${cutoffMs}`

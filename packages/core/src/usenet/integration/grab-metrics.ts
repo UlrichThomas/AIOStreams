@@ -63,6 +63,11 @@ export function grabErrorMessage(err: unknown): string {
 
 const MISSING_CODES = new Set(['missing_on_providers', 'article_not_found']);
 
+/** Whether a grab failure code means articles dead on every provider. */
+export function isMissingCode(code: string | undefined): boolean {
+  return !!code && MISSING_CODES.has(code);
+}
+
 export interface GrabOutcome {
   indexer: string;
   outcome: 'ok' | 'degraded' | 'failed';

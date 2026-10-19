@@ -51,7 +51,15 @@ export {
   type UsenetIndexerQualityDelta,
   type UsenetIndexerQualityRow,
   type UsenetIndexerHeadToHeadRow,
+  type UsenetIndexerAgeDelta,
+  type UsenetIndexerAgeRow,
 } from './repositories/usenet-indexer-metrics.js';
+export {
+  PlaybackMetricsRepository,
+  type PlaybackMetricDelta,
+  type PlaybackMetricRow,
+  type PlaybackMetricScope,
+} from './repositories/playback-metrics.js';
 export {
   StreamSessionRepository,
   type StreamTransport,
