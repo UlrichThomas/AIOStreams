@@ -6,7 +6,13 @@ import path from 'node:path';
 import '../../index.js';
 import { closeDb, initDb } from '../../db/db.js';
 import { UsenetIndexerMetricsRepository } from '../../db/index.js';
-import { ageBucket, ageDelta, AGE_BUCKETS } from './age-metrics.js';
+import { ReleaseBlocklistRepository } from '../../db/repositories/release-blocklist.js';
+import {
+  ageBucket,
+  ageDelta,
+  AGE_BUCKETS,
+  recordBlocklistRefusal,
+} from './age-metrics.js';
 import { ageCells } from './dashboard/stats.js';
 
 const DAY = 86_400_000;
@@ -95,6 +101,29 @@ describe('ageCells', () => {
       [3, 1, 1, 2]
     );
   });
+
+  it('keeps rows from an unrecognised bucket after the known ones', () => {
+    const cells = ageCells([
+      {
+        indexer: 'A',
+        ageBucket: '1-2y',
+        ok: 4,
+        degraded: 0,
+        failed: 1,
+        failedMissing: 0,
+        blocklisted: 0,
+      },
+    ]);
+    assert.equal(cells.length, AGE_BUCKETS.length + 1);
+    assert.deepEqual(cells[cells.length - 1], {
+      ageBucket: '1-2y',
+      ok: 4,
+      degraded: 0,
+      failed: 1,
+      failedMissing: 0,
+      blocklisted: 0,
+    });
+  });
 });
 
 describe('UsenetIndexerMetricsRepository age', () => {
@@ -154,5 +183,17 @@ describe('UsenetIndexerMetricsRepository age', () => {
 
     await UsenetIndexerMetricsRepository.deleteScope({ indexer: 'A' });
     assert.deepEqual(await UsenetIndexerMetricsRepository.ageByIndexer(0), []);
+  });
+
+  it('counts a remote-only refusal once and skips local verdicts', async () => {
+    const remote = `nh1:${'a'.repeat(40)}`;
+    const local = `nh1:${'b'.repeat(40)}`;
+    await ReleaseBlocklistRepository.markVerdict(local, 'dead');
+    const o = { indexer: 'R', postedAtSec: postedDaysAgo(400) };
+
+    assert.equal(await recordBlocklistRefusal(remote, o), true);
+    assert.equal(await recordBlocklistRefusal(remote, o), false);
+    // This instance's own verdict: its failed grab was already counted.
+    assert.equal(await recordBlocklistRefusal(local, o), false);
   });
 });

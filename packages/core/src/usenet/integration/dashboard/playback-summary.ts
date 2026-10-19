@@ -38,8 +38,11 @@ export interface PlaybackSummary {
   rescuedOtherRelease: number;
   /** ok plays per winning failover rank. */
   depth: { rank: string; plays: number }[];
-  /** Failed, unavailable and aborted attempts per ok play; null without any. */
-  wastedPerOk: number | null;
+  /**
+   * Failed, unavailable and aborted attempts per play, over every result, so
+   * numerator and denominator cover the same plays; null without any.
+   */
+  wastedPerPlay: number | null;
   byService: PlaybackServiceRow[];
 }
 
@@ -128,7 +131,7 @@ export function summarisePlayback(
       rank,
       plays: plays(ok.filter((r) => r.rankBucket === rank)),
     })),
-    wastedPerOk: okPlays > 0 ? wasted / okPlays : null,
+    wastedPerPlay: mine.length > 0 ? wasted / plays(mine) : null,
     byService,
   };
 }

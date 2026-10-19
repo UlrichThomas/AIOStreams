@@ -197,7 +197,8 @@ export interface PlaybackSummary {
   rescuedSameRelease: number;
   rescuedOtherRelease: number;
   depth: { rank: string; plays: number }[];
-  wastedPerOk: number | null;
+  /** Failed, unavailable and aborted attempts per play, every result counted. */
+  wastedPerPlay: number | null;
   byService: PlaybackServiceRow[];
 }
 
@@ -417,7 +418,11 @@ const ROOT = ['dashboard', 'usenet'] as const;
 
 const USENET_PERFORMANCE_PROFILES_QUERY_KEY = [...ROOT, 'settings'] as const;
 
-export type UsenetStatsResetTarget = 'providers' | 'indexers' | 'all';
+export type UsenetStatsResetTarget =
+  | 'providers'
+  | 'indexers'
+  | 'playback'
+  | 'all';
 
 export interface UsenetStatsResetInput {
   target: UsenetStatsResetTarget;

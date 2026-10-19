@@ -1,5 +1,6 @@
 import { getDb } from '../db.js';
 import { join, sql, type SqlFragment } from '../sql.js';
+import { hourFloor } from './usenet-indexer-metrics.js';
 
 /** One play's outcome, already bucketed, to fold into an hourly row. */
 export interface PlaybackMetricDelta {
@@ -31,12 +32,6 @@ export interface PlaybackMetricScope {
   sinceMs?: number;
   /** Exclusive upper bound on `hour_ms`. */
   untilMs?: number;
-}
-
-const HOUR_MS = 3_600_000;
-
-function hourFloor(ts: number): number {
-  return ts - (ts % HOUR_MS);
 }
 
 function scopeWhere(s: PlaybackMetricScope): SqlFragment {

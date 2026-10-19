@@ -64,7 +64,7 @@ function impactOf(
   const rows = rowsOf(r);
   if (rows === 0) return 'Nothing recorded in this range.';
   const detail: string[] = [];
-  if (target !== 'indexers' && r.providerRows > 0) {
+  if (target !== 'indexers' && target !== 'playback' && r.providerRows > 0) {
     detail.push(
       `${formatBytes(r.providerBytes)}, ${formatCompact(r.providerArticles)} articles`
     );
@@ -168,8 +168,8 @@ export function ResetStatsModal({
           Deletes the recorded history for{' '}
           <span className="text-[--foreground]">{target.label}</span>. Charts
           and totals are rebuilt from what is left, and this cannot be undone.
-          {target.target !== 'providers' &&
-            ' Indexer grab, search and quality stats are removed together.'}
+          {(target.target === 'indexers' || target.target === 'all') &&
+            ' Indexer grab, search, quality and age stats are removed together.'}
         </p>
 
         <BasicField label="Range">

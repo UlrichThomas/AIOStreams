@@ -2,10 +2,24 @@ import {
   UsenetIndexerMetricsRepository,
   type UsenetIndexerAgeDelta,
 } from '../../db/index.js';
+import { ReleaseBlocklistRepository } from '../../db/repositories/release-blocklist.js';
 import { createLogger } from '../../logging/logger.js';
+import { Cache } from '../../utils/cache.js';
+import { requestLockType } from '../../utils/distributed-lock.js';
 import { isMissingCode } from './grab-metrics.js';
 
 const logger = createLogger('usenet/age-metrics');
+
+/** How long one post's blocklist refusal suppresses counting it again. */
+const REFUSAL_DEDUPE_TTL_S = 7 * 86_400;
+
+/** Posts whose refusal was already counted; shared across replicas on Redis. */
+const countedRefusals = () =>
+  Cache.getInstance<string, true>(
+    'usenet-age:blocklist-refusal',
+    10_000,
+    requestLockType()
+  );
 
 const DAY_MS = 86_400_000;
 
@@ -82,5 +96,39 @@ export function recordAgeOutcome(o: AgeOutcome): void {
     );
   } catch (err) {
     logger.warn({ err }, 'failed to compute grab outcome by age');
+  }
+}
+
+/**
+ * Count a playback grab the blocklist refused before import, at most once
+ * per post per {@link REFUSAL_DEDUPE_TTL_S}: every later click on the same
+ * dead post would otherwise count it again. A post this instance blocklisted
+ * itself is skipped, because the failed grab that blocklisted it was already
+ * counted as `failed` (the same holds for aiostreams.ts's release-key check,
+ * which only honours local verdicts and so records nothing). Only verdicts
+ * from remote sources add posts the age stats would otherwise never see.
+ * Never rejects; resolves to whether the refusal was counted, so callers can
+ * fire and forget it.
+ */
+export async function recordBlocklistRefusal(
+  contentKey: string,
+  o: Omit<AgeOutcome, 'outcome' | 'errorCode'>
+): Promise<boolean> {
+  try {
+    // Unknown counts as local: skipping is the safe side of a double count.
+    if (
+      await ReleaseBlocklistRepository.isLocallyBlocked(contentKey).catch(
+        () => true
+      )
+    )
+      return false;
+    const counted = countedRefusals();
+    if (await counted.get(contentKey)) return false;
+    await counted.set(contentKey, true, REFUSAL_DEDUPE_TTL_S);
+    recordAgeOutcome({ ...o, outcome: 'blocklisted' });
+    return true;
+  } catch (err) {
+    logger.warn({ err }, 'failed to record blocklist refusal by age');
+    return false;
   }
 }

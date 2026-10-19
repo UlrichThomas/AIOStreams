@@ -1505,8 +1505,9 @@ function IndexerAgeTable({
       <p className="text-xs text-[--muted]">
         Share of playback grabs that failed, by how old the post was. Young
         failures are mostly takedowns, old ones mostly expired retention. Counts
-        posts the blocklist refused as failures. Arr and manual imports are left
-        out. Cells with fewer than {MIN_AGE_SAMPLES} grabs are muted.
+        posts a remote blocklist source refused before import as failures, once
+        each. Arr and manual imports are left out. Cells with fewer than{' '}
+        {MIN_AGE_SAMPLES} grabs are muted.
       </p>
       <div className="overflow-x-auto -mx-4 px-4 lg:mx-0 lg:px-0">
         <table className="w-full text-sm">
@@ -1541,8 +1542,22 @@ function IndexerAgeTable({
                 <td className="py-2 pr-3 font-medium whitespace-nowrap">
                   {r.indexer}
                 </td>
-                {r.cells.map((c) => (
-                  <AgeCell key={c.ageBucket} cell={c} who={r.indexer} />
+                {totals.map((t) => (
+                  <AgeCell
+                    key={t.ageBucket}
+                    // By name: an indexer can lack a bucket another has.
+                    cell={
+                      r.cells.find((c) => c.ageBucket === t.ageBucket) ?? {
+                        ageBucket: t.ageBucket,
+                        ok: 0,
+                        degraded: 0,
+                        failed: 0,
+                        failedMissing: 0,
+                        blocklisted: 0,
+                      }
+                    }
+                    who={r.indexer}
+                  />
                 ))}
                 <td className="py-2 px-3 text-right tabular-nums font-medium">
                   {formatCompact(r.total)}
@@ -1595,8 +1610,10 @@ function latencyLabel(bucket: string | null): string {
  */
 function PlaybackCard({
   playback,
+  onReset,
 }: {
   playback: UsenetStatsOverview['playback'] | undefined;
+  onReset: (target: ResetStatsTarget) => void;
 }) {
   const [kind, setKind] = React.useState<'usenet' | 'debrid'>('usenet');
   const p = playback?.[kind];
@@ -1604,17 +1621,25 @@ function PlaybackCard({
     <Card className="p-4">
       <div className="flex items-center justify-between gap-3 mb-3">
         <h3 className="text-sm font-semibold">Time to play</h3>
-        <SegmentedToggle
-          label="Playback kind"
-          options={
-            [
-              { value: 'usenet', label: 'Usenet' },
-              { value: 'debrid', label: 'Debrid' },
-            ] as const
-          }
-          value={kind}
-          onChange={setKind}
-        />
+        <div className="flex items-center gap-2">
+          <SegmentedToggle
+            label="Playback kind"
+            options={
+              [
+                { value: 'usenet', label: 'Usenet' },
+                { value: 'debrid', label: 'Debrid' },
+              ] as const
+            }
+            value={kind}
+            onChange={setKind}
+          />
+          <ResetAllButton
+            label="Reset time-to-play stats"
+            onClick={() =>
+              onReset({ target: 'playback', label: 'Time to play' })
+            }
+          />
+        </div>
       </div>
       {!p || p.plays === 0 ? (
         <p className="text-sm text-[--muted]">
@@ -1661,7 +1686,7 @@ function PlaybackCard({
             />
             <Stat
               label="Wasted attempts"
-              value={p.wastedPerOk == null ? '—' : p.wastedPerOk.toFixed(2)}
+              value={p.wastedPerPlay == null ? '—' : p.wastedPerPlay.toFixed(2)}
               hint="failed or cut-off attempts per play"
             />
           </div>
@@ -1946,7 +1971,7 @@ function StatsSection({
         )}
       </Card>
 
-      <PlaybackCard playback={data.playback} />
+      <PlaybackCard playback={data.playback} onReset={onReset} />
     </div>
   );
 }

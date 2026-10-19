@@ -15,6 +15,7 @@ import {
   runPlayChain,
   recordHeadToHead,
   recordPlayback,
+  decodeStoreAuth,
   getSimpleTextHash,
   DistributedLock,
   type FailoverAttempt,
@@ -232,6 +233,11 @@ router.get(
 
       // Same-release rescues feed the indexer head-to-head stats. Recorded
       // inside `run` so requests sharing a running chain don't count it twice.
+      // Without a chain the clicked item's service is only in its store auth.
+      const clickedServiceId =
+        chain?.clicked?.serviceId ??
+        decodeStoreAuth({ encryptedStoreAuth, fileInfoRaw, metadataId, filename })
+          ?.id;
       const headToHead = [
         {
           type: clickedType,
@@ -239,7 +245,7 @@ router.get(
           indexer:
             chain?.clicked?.indexer ??
             (fileInfo.type === 'usenet' ? fileInfo.indexer : undefined),
-          serviceId: chain?.clicked?.serviceId,
+          serviceId: clickedServiceId,
         },
         ...fallbacks.map((f) => ({
           type: f.type,
@@ -255,19 +261,6 @@ router.get(
         const r = await runPlayChain(attempts, runCfg);
         if (hasFailover)
           recordHeadToHead(headToHead, r.outcomes, r.winnerIndex);
-        recordPlayback(
-          {
-            kind: clickedType,
-            attempts: headToHead,
-            outcomes: r.outcomes,
-            winnerIndex: r.winnerIndex,
-            resolved: !!r.url,
-            errored: !r.url && !!r.error,
-            ms: Date.now() - routeStart,
-            abandoned: clientGone,
-          },
-          clickKey
-        );
         return r;
       };
 
@@ -284,6 +277,23 @@ router.get(
             )
           ).result
         : await run();
+
+      // Per request, not inside `run`: a retry that joined the running chain
+      // and got the URL is a play even when the request that started it hung
+      // up. The dedupe keeps an answered click from counting twice.
+      recordPlayback(
+        {
+          kind: clickedType,
+          attempts: headToHead,
+          outcomes: result.outcomes ?? [],
+          winnerIndex: result.winnerIndex,
+          resolved: !!result.url,
+          errored: !result.url && !!result.error,
+          ms: Date.now() - routeStart,
+          abandoned: clientGone,
+        },
+        clickKey
+      );
 
       if (result.error) {
         const err = result.error;

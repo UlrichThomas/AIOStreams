@@ -3,6 +3,8 @@ import {
   type PlaybackMetricDelta,
 } from '../db/index.js';
 import { createLogger } from '../logging/logger.js';
+import { Cache } from '../utils/cache.js';
+import { requestLockType } from '../utils/distributed-lock.js';
 import type { FailoverAttemptOutcome } from './failover.js';
 
 const logger = createLogger('playback-metrics');
@@ -102,32 +104,57 @@ export function playbackDelta(o: PlaybackOutcome): PlaybackMetricDelta {
 const DEDUPE_WINDOW_MS = 60_000;
 const DEDUPE_MAX_KEYS = 5_000;
 
+/** A click's remembered answer, as the dedupe stores keep it. */
+interface SeenClick {
+  result: PlaybackResult;
+  atMs: number;
+}
+
+/** Cross-replica memory for {@link PlaybackDeduper} (Redis-backed Cache). */
+export interface PlaybackDedupeStore {
+  get(key: string): Promise<SeenClick | undefined>;
+  set(key: string, value: SeenClick, ttlSeconds: number): Promise<void>;
+}
+
 /**
- * Drops repeat requests for a click that already got its answer: a HEAD then
- * GET, or a player re-requesting the URL, would otherwise each record a play,
- * the later ones near-instant off the warm resolve. A click that errored or
- * was abandoned can be recorded again, since a retry after either is a real
- * second wait. Per process: replicas each keep their own.
+ * Drops repeat requests for a click that already got its answer: a player
+ * re-requesting the URL would otherwise record a play each time, the later
+ * ones near-instant off the warm resolve. A click that errored or was
+ * abandoned can be recorded again, since a retry after either is a real
+ * second wait. The local map keeps same-replica checks atomic; the optional
+ * shared store catches a retry that lands on another replica.
  */
 export class PlaybackDeduper {
-  private readonly seen = new Map<
-    string,
-    { result: PlaybackResult; atMs: number }
-  >();
+  private readonly seen = new Map<string, SeenClick>();
 
-  constructor(private readonly windowMs = DEDUPE_WINDOW_MS) {}
+  constructor(
+    private readonly shared?: PlaybackDedupeStore,
+    private readonly windowMs = DEDUPE_WINDOW_MS
+  ) {}
 
-  /** Whether to record this click; remembers it when so. */
-  admit(key: string, result: PlaybackResult, nowMs = Date.now()): boolean {
-    const prev = this.seen.get(key);
-    if (
-      prev &&
+  private blocks(prev: SeenClick | undefined, nowMs: number): boolean {
+    return (
+      !!prev &&
       nowMs - prev.atMs < this.windowMs &&
       (prev.result === 'ok' || prev.result === 'downloading')
-    )
-      return false;
+    );
+  }
+
+  /** Whether to record this click; remembers it when so. */
+  async admit(
+    key: string,
+    result: PlaybackResult,
+    nowMs = Date.now()
+  ): Promise<boolean> {
+    if (this.blocks(this.seen.get(key), nowMs)) return false;
     if (this.seen.size >= DEDUPE_MAX_KEYS) this.prune(nowMs);
     this.seen.set(key, { result, atMs: nowMs });
+    if (!this.shared) return true;
+    const prev = await this.shared.get(key).catch(() => undefined);
+    if (this.blocks(prev, nowMs)) return false;
+    await this.shared
+      .set(key, { result, atMs: nowMs }, Math.ceil(this.windowMs / 1000))
+      .catch(() => {});
     return true;
   }
 
@@ -142,7 +169,16 @@ export class PlaybackDeduper {
   }
 }
 
-const deduper = new PlaybackDeduper();
+let deduper: PlaybackDeduper | undefined;
+
+/** Built on first use, once config says whether Redis is there to share. */
+function getDeduper(): PlaybackDeduper {
+  return (deduper ??= new PlaybackDeduper(
+    requestLockType() === 'redis'
+      ? Cache.getInstance<string, SeenClick>('playback:dedupe', 10_000, 'redis')
+      : undefined
+  ));
+}
 
 /**
  * Record one settled click, once per `dedupeKey` (see {@link PlaybackDeduper}).
@@ -151,10 +187,14 @@ const deduper = new PlaybackDeduper();
 export function recordPlayback(o: PlaybackOutcome, dedupeKey: string): void {
   try {
     const delta = playbackDelta(o);
-    if (!deduper.admit(dedupeKey, delta.result as PlaybackResult)) return;
-    PlaybackMetricsRepository.record(delta).catch((err) =>
-      logger.warn({ err }, 'failed to record playback outcome')
-    );
+    getDeduper()
+      .admit(dedupeKey, delta.result as PlaybackResult)
+      .then((admitted) =>
+        admitted ? PlaybackMetricsRepository.record(delta) : undefined
+      )
+      .catch((err) =>
+        logger.warn({ err }, 'failed to record playback outcome')
+      );
   } catch (err) {
     logger.warn({ err }, 'failed to compute playback outcome');
   }
