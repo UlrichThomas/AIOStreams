@@ -212,7 +212,9 @@ export interface UsenetStatsOverview {
 
 /**
  * Pure: age rows folded into one cell per bucket, every bucket present and in
- * order, so the dashboard's columns line up across indexers.
+ * order, so the dashboard's columns line up across indexers. A bucket name
+ * this build doesn't know (rows from before a bucket change) gets its own
+ * cell after the known ones rather than vanishing from the totals.
  */
 export function ageCells(
   rows: readonly UsenetIndexerAgeRow[]
@@ -231,8 +233,18 @@ export function ageCells(
     ])
   );
   for (const r of rows) {
-    const c = cells.get(r.ageBucket);
-    if (!c) continue;
+    let c = cells.get(r.ageBucket);
+    if (!c) {
+      c = {
+        ageBucket: r.ageBucket,
+        ok: 0,
+        degraded: 0,
+        failed: 0,
+        failedMissing: 0,
+        blocklisted: 0,
+      };
+      cells.set(r.ageBucket, c);
+    }
     c.ok += r.ok;
     c.degraded += r.degraded;
     c.failed += r.failed;
@@ -378,7 +390,11 @@ export async function pruneUsenetMetrics(
 // Resetting recorded stats
 // ---------------------------------------------------------------------------
 
-export type UsenetStatsResetTarget = 'providers' | 'indexers' | 'all';
+export type UsenetStatsResetTarget =
+  | 'providers'
+  | 'indexers'
+  | 'playback'
+  | 'all';
 
 export interface UsenetStatsResetInput {
   target: UsenetStatsResetTarget;
@@ -405,7 +421,7 @@ export interface UsenetStatsResetResult {
   indexerQualityRows: number;
   /** Post-age rows, counted apart from the hourly rollups. */
   indexerAgeRows: number;
-  /** Playback rows: cleared only by an all-stats reset (no `id`). */
+  /** Playback rows: cleared by a playback reset or an all-stats reset. */
   playbackRows: number;
   plays: number;
   lastErrorRows: number;
@@ -433,7 +449,8 @@ export async function resetUsenetStats(
   const touchesProviders = target === 'providers' || target === 'all';
   const touchesIndexers = target === 'indexers' || target === 'all';
   // Plays belong to no single provider or indexer.
-  const touchesPlayback = target === 'all' && id === undefined;
+  const touchesPlayback =
+    target === 'playback' || (target === 'all' && id === undefined);
   const providerScope = { providerId: id, sinceMs, untilMs };
   const indexerScope = { indexer: id, sinceMs, untilMs };
 

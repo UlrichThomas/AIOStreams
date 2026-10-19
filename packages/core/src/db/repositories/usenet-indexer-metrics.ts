@@ -142,7 +142,8 @@ export interface UsenetIndexerScope {
 
 const HOUR_MS = 3_600_000;
 
-function hourFloor(ts: number): number {
+/** Start of the hour bucket containing `ts`; shared with the playback rollups. */
+export function hourFloor(ts: number): number {
   return ts - (ts % HOUR_MS);
 }
 

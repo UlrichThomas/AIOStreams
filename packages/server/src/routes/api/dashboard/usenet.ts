@@ -49,6 +49,7 @@ const WINDOWS: UsenetStatsWindow[] = ['24h', '7d', '30d', 'all'];
 const RESET_TARGETS: UsenetStatsResetTarget[] = [
   'providers',
   'indexers',
+  'playback',
   'all',
 ];
 const STATUS_GROUPS: UsenetLibraryStatusGroup[] = ['active', 'history', 'all'];

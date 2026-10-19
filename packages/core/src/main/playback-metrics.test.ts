@@ -118,20 +118,34 @@ describe('playbackDelta', () => {
 });
 
 describe('PlaybackDeduper', () => {
-  it('drops repeats of an answered click inside the window', () => {
-    const dd = new PlaybackDeduper(60_000);
-    assert.equal(dd.admit('k', 'ok', 0), true);
-    assert.equal(dd.admit('k', 'ok', 30_000), false);
-    assert.equal(dd.admit('k', 'ok', 61_000), true);
-    assert.equal(dd.admit('other', 'ok', 61_000), true);
+  it('drops repeats of an answered click inside the window', async () => {
+    const dd = new PlaybackDeduper(undefined, 60_000);
+    assert.equal(await dd.admit('k', 'ok', 0), true);
+    assert.equal(await dd.admit('k', 'ok', 30_000), false);
+    assert.equal(await dd.admit('k', 'ok', 61_000), true);
+    assert.equal(await dd.admit('other', 'ok', 61_000), true);
   });
 
-  it('lets a retry after an error or a hang-up through', () => {
-    const dd = new PlaybackDeduper(60_000);
-    assert.equal(dd.admit('k', 'error', 0), true);
-    assert.equal(dd.admit('k', 'abandoned', 1_000), true);
-    assert.equal(dd.admit('k', 'ok', 2_000), true);
-    assert.equal(dd.admit('k', 'ok', 3_000), false);
+  it('lets a retry after an error or a hang-up through', async () => {
+    const dd = new PlaybackDeduper(undefined, 60_000);
+    assert.equal(await dd.admit('k', 'error', 0), true);
+    assert.equal(await dd.admit('k', 'abandoned', 1_000), true);
+    assert.equal(await dd.admit('k', 'ok', 2_000), true);
+    assert.equal(await dd.admit('k', 'ok', 3_000), false);
+  });
+
+  it('catches a retry that lands on another replica via the shared store', async () => {
+    const shared = new Map<string, { result: 'ok'; atMs: number }>();
+    const store = {
+      get: async (k: string) => shared.get(k),
+      set: async (k: string, v: { result: 'ok'; atMs: number }) => {
+        shared.set(k, v);
+      },
+    };
+    const replicaA = new PlaybackDeduper(store, 60_000);
+    const replicaB = new PlaybackDeduper(store, 60_000);
+    assert.equal(await replicaA.admit('k', 'ok', 0), true);
+    assert.equal(await replicaB.admit('k', 'ok', 5_000), false);
   });
 });
 
@@ -174,7 +188,8 @@ describe('summarisePlayback', () => {
     assert.equal(s.slowShare, 1 / 3);
     assert.equal(s.rescuedOtherRelease, 1);
     assert.equal(s.rescuedSameRelease, 0);
-    assert.equal(s.wastedPerOk, 1 / 3);
+    // One failed attempt over four plays, not over the three that played.
+    assert.equal(s.wastedPerPlay, 1 / 4);
     assert.equal(s.p50Bucket, '2-5s');
   });
 });

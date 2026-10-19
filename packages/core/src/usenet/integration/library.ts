@@ -91,7 +91,7 @@ import {
   grabHttpStatus,
   grabErrorMessage,
 } from './grab-metrics.js';
-import { recordAgeOutcome } from './age-metrics.js';
+import { recordAgeOutcome, recordBlocklistRefusal } from './age-metrics.js';
 
 const logger = createLogger('usenet/library');
 
@@ -868,10 +868,9 @@ export async function resolveFileList(
       );
       // Known-dead posts never reach the import, so count them here or the
       // age buckets they cluster in would look healthier than they are.
-      recordAgeOutcome({
+      void recordBlocklistRefusal(contentKey, {
         indexer: indexerLabelFor(playbackInfo.indexer, playbackInfo.nzb),
         postedAtSec: nzbPostedAt(nzb),
-        outcome: 'blocklisted',
       });
       throw new DebridError(
         `nzb is blocklisted (${verdict.reason ?? verdict.verdict})`,
