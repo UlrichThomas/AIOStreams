@@ -19,6 +19,7 @@ import {
   getSimpleTextHash,
   DistributedLock,
   type FailoverAttempt,
+  type RunPlayChainResult,
   type FailoverContentType,
   type PlayChainItem,
   type PlaybackTarget,
@@ -66,6 +67,10 @@ router.get(
     res.on('close', () => {
       if (!res.writableEnded) clientGone = true;
     });
+    // Set once the click is known, so a throw past that point still counts.
+    let recordPlay:
+      | ((r: Partial<Omit<RunPlayChainResult, 'failedOver'>>) => void)
+      | undefined;
     try {
       const {
         encryptedStoreAuth,
@@ -190,13 +195,11 @@ router.get(
               signal
             ),
         },
-        ...fallbacks.map(
-          (f): FailoverAttempt => ({
-            label: describeChainItem(f),
-            rank: f.rank,
-            resolve: resolveTarget(f),
-          })
-        ),
+        ...fallbacks.map((f): FailoverAttempt => ({
+          label: describeChainItem(f),
+          rank: f.rank,
+          resolve: resolveTarget(f),
+        })),
       ];
 
       const runCfg = {
@@ -236,8 +239,12 @@ router.get(
       // Without a chain the clicked item's service is only in its store auth.
       const clickedServiceId =
         chain?.clicked?.serviceId ??
-        decodeStoreAuth({ encryptedStoreAuth, fileInfoRaw, metadataId, filename })
-          ?.id;
+        decodeStoreAuth({
+          encryptedStoreAuth,
+          fileInfoRaw,
+          metadataId,
+          filename,
+        })?.id;
       const headToHead = [
         {
           type: clickedType,
@@ -257,6 +264,27 @@ router.get(
       const clickKey = `${getSimpleTextHash(
         encryptedStoreAuth + metadataId + filename + fallbackKey
       )}:${clientIp ?? '-'}`;
+      // Per request, not inside `run`: a retry that joined the running chain
+      // and got the URL is a play even when the request that started it hung
+      // up. The dedupe keeps an answered click from counting twice.
+      let playRecorded = false;
+      recordPlay = (r) => {
+        if (playRecorded) return;
+        playRecorded = true;
+        recordPlayback(
+          {
+            kind: clickedType,
+            attempts: headToHead,
+            outcomes: r.outcomes ?? [],
+            winnerIndex: r.winnerIndex,
+            resolved: !!r.url,
+            errored: !r.url && !!r.error,
+            ms: Date.now() - routeStart,
+            abandoned: clientGone,
+          },
+          clickKey
+        );
+      };
       const run = async () => {
         const r = await runPlayChain(attempts, runCfg);
         if (hasFailover)
@@ -278,22 +306,7 @@ router.get(
           ).result
         : await run();
 
-      // Per request, not inside `run`: a retry that joined the running chain
-      // and got the URL is a play even when the request that started it hung
-      // up. The dedupe keeps an answered click from counting twice.
-      recordPlayback(
-        {
-          kind: clickedType,
-          attempts: headToHead,
-          outcomes: result.outcomes ?? [],
-          winnerIndex: result.winnerIndex,
-          resolved: !!result.url,
-          errored: !result.url && !!result.error,
-          ms: Date.now() - routeStart,
-          abandoned: clientGone,
-        },
-        clickKey
-      );
+      recordPlay(result);
 
       if (result.error) {
         const err = result.error;
@@ -351,6 +364,9 @@ router.get(
         });
       }
     } catch (error: any) {
+      // A chain or lock that threw (e.g. a lock wait timing out) is still a
+      // click that failed; a no-op when the play was already recorded.
+      recordPlay?.({ error });
       if (error instanceof APIError || error instanceof ZodError) {
         next(error);
       } else {

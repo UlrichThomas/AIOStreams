@@ -70,7 +70,8 @@ export function summarisePlayback(
   rows: readonly PlaybackMetricRow[],
   kind: string
 ): PlaybackSummary {
-  const mine = rows.filter((r) => r.kind === kind);
+  // A retracted provisional answer nets its row to zero in every column.
+  const mine = rows.filter((r) => r.kind === kind && r.plays > 0);
   const ok = mine.filter((r) => r.result === 'ok');
   const sum = (
     rs: readonly PlaybackMetricRow[],
