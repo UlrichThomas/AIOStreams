@@ -100,13 +100,47 @@ export function playbackDelta(o: PlaybackOutcome): PlaybackMetricDelta {
   };
 }
 
-/** How long a click's answer suppresses repeat records of it. */
-const DEDUPE_WINDOW_MS = 60_000;
+/**
+ * How long a click's answer suppresses repeat records of it: about a film's
+ * length, since some players go back to the playback URL on every seek or
+ * reconnect, and each of those would otherwise count as a near-instant play.
+ */
+const DEDUPE_WINDOW_MS = 3 * 3_600_000;
 const DEDUPE_MAX_KEYS = 5_000;
 
+/**
+ * A final answer that starts within this long of a provisional one (or before
+ * it settled, as a request joining the same chain does) continues that wait,
+ * so it is timed from the first request. A later re-click is timed on its own.
+ */
+const RETRY_GAP_MS = 30_000;
+
+/** Results a later answer for the same click replaces rather than adds to. */
+const PROVISIONAL: ReadonlySet<PlaybackResult> = new Set([
+  'downloading',
+  'abandoned',
+]);
+
 /** A click's remembered answer, as the dedupe stores keep it. */
-interface SeenClick {
+export interface SeenClick {
   result: PlaybackResult;
+  /** When the answer was recorded: its row is in this hour. */
+  atMs: number;
+  /** When the wait this answer ended began. */
+  startMs: number;
+  /** The row recorded for it, so a later answer can retract it. */
+  delta: PlaybackMetricDelta;
+}
+
+/** One click's answer, as the route measured it. */
+export interface ClickAnswer {
+  startMs: number;
+  delta: PlaybackMetricDelta;
+}
+
+/** One fold into the hourly rows, at the hour of `atMs`. */
+export interface PlaybackWrite {
+  delta: PlaybackMetricDelta;
   atMs: number;
 }
 
@@ -116,13 +150,41 @@ export interface PlaybackDedupeStore {
   set(key: string, value: SeenClick, ttlSeconds: number): Promise<void>;
 }
 
+/** Pure: `d` timed as `ms` instead. */
+export function withLatency(
+  d: PlaybackMetricDelta,
+  ms: number
+): PlaybackMetricDelta {
+  return {
+    ...d,
+    latencyBucket: latencyBucket(ms),
+    sumMs: Math.max(0, Math.round(ms)),
+  };
+}
+
+/** Pure: the delta that cancels `d` in its row. */
+export function negateDelta(d: PlaybackMetricDelta): PlaybackMetricDelta {
+  return {
+    ...d,
+    plays: -d.plays,
+    sumMs: -d.sumMs,
+    sameReleaseWins: -d.sameReleaseWins,
+    attemptsLaunched: -d.attemptsLaunched,
+    failedAttempts: -d.failedAttempts,
+    unavailableAttempts: -d.unavailableAttempts,
+    abortedAttempts: -d.abortedAttempts,
+  };
+}
+
 /**
- * Drops repeat requests for a click that already got its answer: a player
- * re-requesting the URL would otherwise record a play each time, the later
- * ones near-instant off the warm resolve. A click that errored or was
- * abandoned can be recorded again, since a retry after either is a real
- * second wait. The local map keeps same-replica checks atomic; the optional
- * shared store catches a retry that lands on another replica.
+ * Counts each click once. A repeat of a click that played is dropped. A click
+ * left provisional ('downloading', or the player hung up) is replaced by its
+ * final answer: the provisional row is retracted in the hour it was recorded
+ * and the final one recorded, so "downloading, then played on the retry" or a
+ * hung-up request beside a retry that joined its chain reads as one play. A
+ * retry after an error is a real second wait and counts again. The local map
+ * keeps same-replica checks atomic; the optional shared store catches a retry
+ * that lands on another replica.
  */
 export class PlaybackDeduper {
   private readonly seen = new Map<string, SeenClick>();
@@ -132,30 +194,64 @@ export class PlaybackDeduper {
     private readonly windowMs = DEDUPE_WINDOW_MS
   ) {}
 
-  private blocks(prev: SeenClick | undefined, nowMs: number): boolean {
-    return (
-      !!prev &&
-      nowMs - prev.atMs < this.windowMs &&
-      (prev.result === 'ok' || prev.result === 'downloading')
+  /** What an answer writes given the click's earlier one; null drops it. */
+  private plan(
+    prev: SeenClick | undefined,
+    a: ClickAnswer,
+    nowMs: number
+  ): { entry: SeenClick; writes: PlaybackWrite[] } | null {
+    const result = a.delta.result as PlaybackResult;
+    const record = (delta: PlaybackMetricDelta, startMs: number) => ({
+      entry: { result, atMs: nowMs, startMs, delta },
+      writes: [{ delta, atMs: nowMs }],
+    });
+    if (!prev || nowMs - prev.atMs >= this.windowMs || prev.result === 'error')
+      return record(a.delta, a.startMs);
+    if (!PROVISIONAL.has(prev.result) || PROVISIONAL.has(result)) return null;
+    const continues = a.startMs - prev.atMs <= RETRY_GAP_MS;
+    const startMs = continues ? Math.min(prev.startMs, a.startMs) : a.startMs;
+    const out = record(
+      continues ? withLatency(a.delta, nowMs - startMs) : a.delta,
+      startMs
     );
+    out.writes.unshift({ delta: negateDelta(prev.delta), atMs: prev.atMs });
+    return out;
   }
 
-  /** Whether to record this click; remembers it when so. */
+  /** The writes this answer makes (none for a repeat); remembers it. */
   async admit(
     key: string,
-    result: PlaybackResult,
+    a: ClickAnswer,
     nowMs = Date.now()
-  ): Promise<boolean> {
-    if (this.blocks(this.seen.get(key), nowMs)) return false;
-    if (this.seen.size >= DEDUPE_MAX_KEYS) this.prune(nowMs);
-    this.seen.set(key, { result, atMs: nowMs });
-    if (!this.shared) return true;
-    const prev = await this.shared.get(key).catch(() => undefined);
-    if (this.blocks(prev, nowMs)) return false;
+  ): Promise<PlaybackWrite[]> {
+    const local = this.seen.get(key);
+    const mine = this.plan(local, a, nowMs);
+    if (!mine) return [];
+    // Reserve before awaiting, so a concurrent answer here plans against it.
+    this.remember(key, mine.entry, nowMs);
+    if (!this.shared) return mine.writes;
+    const remote = await this.shared.get(key).catch(() => undefined);
+    // Only another replica's newer answer changes the plan.
+    const plan =
+      remote && (!local || remote.atMs > local.atMs)
+        ? this.plan(remote, a, nowMs)
+        : mine;
+    if (!plan) {
+      this.remember(key, remote!, nowMs);
+      return [];
+    }
+    if (plan !== mine) this.remember(key, plan.entry, nowMs);
     await this.shared
-      .set(key, { result, atMs: nowMs }, Math.ceil(this.windowMs / 1000))
+      .set(key, plan.entry, Math.ceil(this.windowMs / 1000))
       .catch(() => {});
-    return true;
+    return plan.writes;
+  }
+
+  private remember(key: string, entry: SeenClick, nowMs: number): void {
+    // Re-insert so Map order stays oldest-first for pruning.
+    this.seen.delete(key);
+    if (this.seen.size >= DEDUPE_MAX_KEYS) this.prune(nowMs);
+    this.seen.set(key, entry);
   }
 
   private prune(nowMs: number): void {
@@ -186,12 +282,17 @@ function getDeduper(): PlaybackDeduper {
  */
 export function recordPlayback(o: PlaybackOutcome, dedupeKey: string): void {
   try {
-    const delta = playbackDelta(o);
+    const nowMs = Date.now();
     getDeduper()
-      .admit(dedupeKey, delta.result as PlaybackResult)
-      .then((admitted) =>
-        admitted ? PlaybackMetricsRepository.record(delta) : undefined
+      .admit(
+        dedupeKey,
+        { startMs: nowMs - o.ms, delta: playbackDelta(o) },
+        nowMs
       )
+      .then(async (writes) => {
+        for (const w of writes)
+          await PlaybackMetricsRepository.record(w.delta, w.atMs);
+      })
       .catch((err) =>
         logger.warn({ err }, 'failed to record playback outcome')
       );
